@@ -3,8 +3,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const backendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const rootDir = path.resolve(backendDir, '..');
-const dataDir = path.join(backendDir, 'data');
+const rootDir = process.env.CROSSBORDER_DATA_ROOT
+  ? path.resolve(process.env.CROSSBORDER_DATA_ROOT)
+  : path.resolve(backendDir, '..');
+const dataDir = path.join(rootDir, 'backend', 'data');
 const dbPath = path.join(dataDir, 'db.json');
 const uploadDir = path.join(rootDir, 'uploads');
 const outputDir = path.join(rootDir, 'outputs');

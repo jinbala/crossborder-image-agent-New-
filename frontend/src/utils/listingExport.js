@@ -1,3 +1,5 @@
+import {exportReportText, exportReportLabel} from './exportReportLabels.js';
+
 const SECRET_PATTERNS = [
   [/[A-Z]:\\[^\s"',，。；;]+/gi, '[local-path-removed]'],
   [/\b[\w.-]*\.sqlite\b/gi, '[sqlite-path-removed]'],
@@ -39,15 +41,16 @@ export function normalizeListingExportOptions(input = {}) {
   return {
     platforms: platforms.length ? [...new Set(platforms)] : ['amazon'],
     includeMockImages: input.includeMockImages !== false,
+    includeRealSamples: input.includeRealSamples === true,
     confirmExport: input.confirmExport === true
   };
 }
 
-export function getListingExportDisplayModel({ preview, result } = {}) {
+export function getListingExportDisplayModel({ preview, result } = {}, t) {
   const source = result || preview || null;
   if (!source) {
     return {
-      emptyText: '暂无 CSV 预览。请先点击“预览 CSV”，确认缺失字段、blocked 字段和 noReview SKU。',
+      emptyText: exportReportText(t, '暂无 CSV 预览。请先点击“预览 CSV”，确认缺失字段、blocked 字段和 noReview SKU。'),
       platformRows: [],
       fileRows: [],
       missingText: '',
@@ -55,23 +58,23 @@ export function getListingExportDisplayModel({ preview, result } = {}) {
       noReviewText: '',
       warningText: '',
       recommendationText: '',
-      notice: listingExportNotice
+      notice: exportReportText(t, listingExportNotice)
     };
   }
   const summary = source.summary || {};
   const rowsByPlatform = summary.rowsByPlatform || {};
   return {
     emptyText: '',
-    notice: listingExportNotice,
+    notice: exportReportText(t, listingExportNotice),
     platformRows: Object.entries(rowsByPlatform).map(([platform, rows]) => ({ platform, rows })),
     fileRows: asArray(source.files).map(sanitizeForDisplay),
-    missingText: asArray(summary.missingRequiredFields).map((item) => `${item.sku || '-'} ${item.platform || '-'} ${item.field || '-'}`).join(' / ') || '无',
-    blockedText: asArray(summary.blockedFields).map((item) => `${item.sku || '-'} ${item.field || '-'} ${item.status || '-'}`).join(' / ') || '无',
-    noReviewText: asArray(summary.noReviewSku).join(' / ') || '无',
-    failedText: asArray(summary.failedSku).map((item) => item.sku || item.taskId).join(' / ') || '无',
+    missingText: asArray(summary.missingRequiredFields).map((item) => `${item.sku || '-'} ${item.platform || '-'} ${item.field || '-'}`).join(' / ') || exportReportText(t, '无'),
+    blockedText: asArray(summary.blockedFields).map((item) => `${item.sku || '-'} ${item.field || '-'} ${exportReportLabel('status',item.status,t) || '-'}`).join(' / ') || exportReportText(t, '无'),
+    noReviewText: asArray(summary.noReviewSku).join(' / ') || exportReportText(t, '无'),
+    failedText: asArray(summary.failedSku).map((item) => item.sku || item.taskId).join(' / ') || exportReportText(t, '无'),
     warningText: [...asArray(summary.warnings), ...asArray(source.warnings)].map(safeText).join(' / '),
     recommendationText: asArray(summary.recommendations).map(safeText).join(' / '),
-    resultText: result?.exportId ? `已生成 ${safeText(result.exportId)}` : ''
+    resultText: result?.exportId ? exportReportText(t, '已生成 {name}', {name:safeText(result.exportId)}) : ''
   };
 }
 

@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "跨境图片工作台 - Temu 深采助手",
+  "version": "0.5.4",
+  "description": "在用户已登录的 Temu 浏览器会话中逐页采集商品标题、销量和图片，并发送到本地工作台。",
+  "permissions": ["activeTab", "tabs", "scripting", "storage", "alarms"],
+  "host_permissions": [
+    "https://*.temu.com/*",
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": ["https://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Temu 深采助手",
+    "default_popup": "popup.html"
+  }
+}

@@ -26,6 +26,7 @@ import { analyzeTemplateSet } from '../services/templateAuditService.js';
 import { buildReviewReport } from '../services/reviewReportService.js';
 import { buildAutoFixPlan } from '../services/autoFixPlanService.js';
 import { executeApprovedAutoFixPlan, refreshPostFixValidation } from '../services/autoFixExecutionService.js';
+import { paidProviderSummary, requirePaidConfirmation, isRealQueueMode } from '../services/paidOperationPolicy.js';
 
 const router = express.Router();
 const MAX_IMAGE_COUNT = 15;
@@ -403,6 +404,7 @@ router.post('/upload', upload.any(), asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/recognize', asyncHandler(async (req, res) => {
+  requirePaidConfirmation(req.body, paidProviderSummary().vision.provider !== 'mock');
   const current = await requireTask(req.params.id);
   assertTaskStatus(current, TASK_TRANSITIONS.recognize, 'Recognition');
   if (process.env.DEBUG_PROVIDER_CONFIG === 'true') {
@@ -629,6 +631,7 @@ router.post('/:id/plans/:planId/reference', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/plans/:planId/matting-preview', asyncHandler(async (req, res) => {
+  requirePaidConfirmation(req.body, !paidProviderSummary().matting.local);
   const current = await requireTask(req.params.id);
   assertTaskStatus(current, allowedReferenceStatuses(), 'Matting preview');
   const requestedSourceId = req.body?.sourceImageId || current.imagePlans?.find((plan) => plan.id === req.params.planId)?.productReferenceOverride?.sourceImageId;
@@ -712,6 +715,7 @@ router.post('/:id/generate', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/generate/:planId', asyncHandler(async (req, res) => {
+  requirePaidConfirmation(req.body, req.body?.mode === 'real_background' || isRealQueueMode(req.body?.mode));
   const current = await requireTask(req.params.id);
   assertTaskStatus(current, allowedSingleGenerateStatuses(), 'Single image generation');
   const planIndex = (current.imagePlans || []).findIndex((plan) => plan.id === req.params.planId);
@@ -798,6 +802,7 @@ router.post('/:id/generate/:planId', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/review', asyncHandler(async (req, res) => {
+  requirePaidConfirmation(req.body, req.body?.mode === 'real');
   const current = await requireTask(req.params.id);
   assertTaskStatus(current, TASK_TRANSITIONS.reviewImages, 'Compliance review');
   const mode = req.body?.mode === 'real' ? 'real' : 'mock';

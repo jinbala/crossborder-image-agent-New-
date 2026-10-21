@@ -1,3 +1,5 @@
+import {exportReportText, exportReportLabel, exportReportCards, exportReportBoolean} from './exportReportLabels.js';
+
 const SECRET_PATTERNS = [
   [/[A-Z]:\\[^\s"',，。；;]+/gi, '[local-path-removed]'],
   [/\b[\w.-]*\.sqlite\b/gi, '[sqlite-path-removed]'],
@@ -32,21 +34,21 @@ function sanitizeForDisplay(value) {
   return value;
 }
 
-function issueText(items = []) {
+function issueText(items = [], t) {
   return asArray(items)
     .map((item) => {
       if (typeof item === 'string') return safeText(item);
-      return [item.severity, item.code, item.message].filter(Boolean).map(safeText).join(' - ');
+      return [exportReportLabel('severity',item.severity,t), item.code, item.message].filter(Boolean).map(safeText).join(' - ');
     })
     .filter(Boolean)
     .join(' / ');
 }
 
-export function getUploadSafetyDisplayModel(report) {
+export function getUploadSafetyDisplayModel(report, t) {
   if (!report) {
     return {
-      emptyText: '暂无上传安全检查报告。请点击“刷新凭据状态”查看当前只读状态。',
-      notice: uploadSafetyNotice,
+      emptyText: exportReportText(t, '暂无上传安全检查报告。请点击“刷新凭据状态”查看当前只读状态。'),
+      notice: exportReportText(t, uploadSafetyNotice),
       summaryCards: [],
       platformRows: [],
       findingText: '',
@@ -59,29 +61,29 @@ export function getUploadSafetyDisplayModel(report) {
   const credentialStatus = report.credentialStatus || {};
   return {
     emptyText: '',
-    notice: uploadSafetyNotice,
-    summaryCards: [
-      { label: 'realUploadEnabled', value: String(report.meta?.realUploadEnabled === true || credentialStatus.realUploadEnabled === true) },
-      { label: 'readyForSandboxApi', value: String(summary.readyForSandboxApi === true) },
-      { label: 'readyForRealUpload', value: String(summary.readyForRealUpload === true) },
+    notice: exportReportText(t, uploadSafetyNotice),
+    summaryCards: exportReportCards([
+      { label: 'realUploadEnabled', value: exportReportBoolean(report.meta?.realUploadEnabled === true || credentialStatus.realUploadEnabled === true, t) },
+      { label: 'readyForSandboxApi', value: exportReportBoolean(summary.readyForSandboxApi === true, t) },
+      { label: 'readyForRealUpload', value: exportReportBoolean(summary.readyForRealUpload === true, t) },
       { label: 'platformsChecked', value: String(summary.platformsChecked || 0) },
       { label: 'criticalIssues', value: String(summary.criticalIssues || 0) },
       { label: 'warnings', value: String(summary.warnings || 0) }
-    ],
+    ], t),
     platformRows: asArray(credentialStatus.platforms).map((platform) => {
       const safe = sanitizeForDisplay(platform);
       return {
         ...safe,
-        configuredText: safe.configured ? '已配置' : '未配置',
-        sandboxText: safe.sandboxSupported ? '支持 dry-run' : '占位',
-        realUploadText: safe.realUploadSupported ? '支持真实上传' : '不支持真实上传',
+        configuredText: exportReportText(t, safe.configured === true ? '已配置' : '未配置'),
+        sandboxText: exportReportText(t, safe.sandboxSupported === true ? '支持 dry-run' : '占位'),
+        realUploadText: exportReportText(t, safe.realUploadSupported === true ? '支持真实上传' : '不支持真实上传'),
         requiredVariablesText: asArray(safe.requiredVariables).join(', ') || '-',
         configuredVariablesText: asArray(safe.configuredVariables).join(', ') || '-',
         missingVariablesText: asArray(safe.missingVariables).join(', ') || '-',
-        warningText: issueText(safe.warnings)
+        warningText: issueText(safe.warnings,t)
       };
     }),
-    findingText: issueText(report.securityFindings),
+    findingText: issueText(report.securityFindings,t),
     recommendationText: asArray(report.recommendations).map(safeText).join(' / '),
     nextSuggestedAction: safeText(report.nextSuggestedAction || '')
   };

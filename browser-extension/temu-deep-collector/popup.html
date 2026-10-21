@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Temu 深采助手</title>
+    <style>
+      body{width:360px;margin:0;padding:16px;font-family:system-ui,"Microsoft YaHei",sans-serif;color:#172033;background:#f7faf9}h1{margin:0;font-size:18px}.hint{font-size:12px;line-height:1.6;color:#64748b;margin:6px 0 14px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}label{font-size:12px;color:#475569}input{box-sizing:border-box;width:100%;margin-top:4px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;background:white}.check{display:flex;align-items:flex-start;gap:8px;margin-top:12px;padding:9px;border:1px solid #cbd5e1;border-radius:7px;background:#fff;line-height:1.5}.check input{width:auto;margin:2px 0 0;padding:0}.status{margin:14px 0;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:white;font-size:12px;line-height:1.6;white-space:pre-line}.actions{display:flex;flex-wrap:wrap;gap:8px}button,a{border:0;border-radius:6px;padding:8px 11px;font-size:12px;font-weight:600;cursor:pointer;text-decoration:none}.primary{background:#176b62;color:white}.secondary{background:#e2e8f0;color:#334155}.warning{background:#fef3c7;color:#92400e}.danger{background:#fee2e2;color:#991b1b}.open{display:none;background:#dcfce7;color:#166534}.error{margin-top:10px;color:#b91c1c;font-size:12px}.notice{margin-top:12px;padding:9px;border-radius:6px;background:#eff6ff;color:#1e3a8a;font-size:11px;line-height:1.5}
+      .workflow{position:sticky;top:0;z-index:2;padding:12px;margin:10px 0;border:2px solid #176b62;border-radius:9px;background:white;box-shadow:0 2px 8px #17203312}.workflow p{margin:0 0 9px;font-size:12px;line-height:1.6}.workflow .actions>*{flex:1;text-align:center;white-space:nowrap}.workflow .open{flex-basis:100%}button:disabled{opacity:.5;cursor:not-allowed}details{margin:10px 0;padding:10px;border:1px solid #cbd5e1;border-radius:8px;background:white}summary{font-size:12px;font-weight:600;cursor:pointer}details>label,details>.grid{margin-top:10px}details>button{margin-top:9px}h1 small{font-size:11px;font-weight:400;color:#64748b}.error{white-space:pre-line;line-height:1.6}
+    </style>
+  </head>
+  <body>
+    <h1>Temu 深采助手 <small>0.5.4</small></h1>
+    <p class="hint">先手动打开一个 Temu 商品页。只采集和下载，不发布商品、不改价、不绕过验证码。</p>
+    <section class="workflow" aria-label="手动采集三步操作">
+      <p id="workflowStep" role="status">第 1 步：打开商品页，再点“采集当前商品”。</p>
+      <div class="actions"><button id="collectCurrent" class="secondary">1. 采集当前商品</button><button id="finishManual" class="primary">2. 发送到本地工作台</button><a id="openJob" class="open" target="_blank" rel="noopener">3. 查看下载任务</a></div>
+      <div id="error" class="error" role="alert"></div>
+    </section>
+    <details id="connectionDetails"><summary>客户端连接（首次发送前先配对）</summary><label>本机服务地址<input id="serviceUrl" placeholder="复制客户端显示的 http://127.0.0.1:端口"></label><label>一次性配对码<input id="pairCode" autocomplete="off" maxlength="12"></label><button id="pairClient" class="secondary">连接客户端</button><button id="checkClient" class="secondary">检测连接</button><p id="connectionStatus" class="hint">未配对，不会自动连接 4000；重启客户端或浏览器后请重新配对。</p><details><summary>源码开发模式（普通用户无需使用）</summary><button id="developmentClient" class="secondary">明确连接无鉴权开发服务</button></details></details>
+    <details id="collectionSettings"><summary>更多采集设置（可选）</summary>
+    <div class="grid">
+      <label>任务名称<input id="name" value="Temu 深度采集"></label>
+      <label>最多商品<input id="maxProducts" type="number" min="1" max="200" value="10"></label>
+      <label>最低销量<input id="minSales" type="number" min="0" value="0"></label>
+      <label>页面稳定等待<input id="pageWaitMs" type="number" min="3000" max="30000" step="1000" value="6000"></label>
+      <label>商品间隔毫秒<input id="betweenProductsMs" type="number" min="3000" max="60000" step="1000" value="8000"></label>
+      <label>每轮商品数<input id="batchSize" type="number" min="1" max="10" value="3"></label>
+      <label>轮次冷却秒<input id="cooldownSeconds" type="number" min="30" max="1800" step="30" value="60"></label>
+    </div>
+    <label class="check"><input id="browserSessionDownload" type="checkbox" checked><span>用当前登录会话下载图片并回传本机（会按图片域名请求浏览器权限，不导出 Cookie）</span></label>
+    </details>
+    <div id="status" class="status">正在读取状态…</div>
+    <div class="actions">
+      <button id="retryFailed" class="secondary">只重试失败商品</button>
+      <button id="reset" class="danger">清空进度</button>
+    </div>
+    <details id="automaticCollection"><summary>自动列表深采（可选，建议先完成手动采集）</summary><p class="hint">在列表页识别符合条件的商品，再低频逐页采集。出现验证码立即暂停，请自行完成验证。</p><div class="actions"><button id="prepare" class="secondary">识别当前列表</button><button id="start" class="primary">开始/继续</button><button id="stop" class="warning">暂停</button></div></details>
+    <div class="notice">发送后在上方点“3. 查看下载任务”打开客户端结果。配对成功只表示已连接，仍需发送图片。发送失败请保留清单，不要重新采集或清空；可在配对后继续原发送。</div>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -11,6 +11,13 @@ import {
 } from '../src/services/mattingService.js';
 import { Image2MattingProvider } from '../src/providers/matting/image2MattingProvider.js';
 
+test('generation approval destination contains only an HTTP origin, not URL credentials, paths or query keys', () => {
+  const config = getMattingConfig({ OPENAI_BASE_URL: 'https://user:password@images.example/private?token=secret', OPENAI_API_KEY: 'sk-private-secret' });
+  assert.equal(config.generationDestination.origin, 'https://images.example');
+  assert.doesNotMatch(JSON.stringify(config), /password|private\?|token=secret|sk-private-secret/);
+  assert.equal(getMattingConfig({ OPENAI_BASE_URL: 'javascript:alert(1)' }).generationDestination.origin, null);
+});
+
 async function makeImage() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cia-matting-service-'));
   const imagePath = path.join(dir, 'source.png');
@@ -65,7 +72,7 @@ test('matting config defaults to sharp and never exposes external API key', () =
   assert.equal(config.currentProvider, 'sharp');
   assert.equal(config.defaultProvider, 'sharp');
   assert.equal(config.externalConfigured, false);
-  assert.deepEqual(config.availableProviders, ['sharp', 'external', 'image2', 'auto']);
+  assert.deepEqual(config.availableProviders, ['sharp', 'rembg', 'external', 'image2', 'auto']);
   assert.equal(JSON.stringify(config).includes('secret-key'), false);
   assert.match(config.warning, /第三方抠图 API 未配置/);
 });

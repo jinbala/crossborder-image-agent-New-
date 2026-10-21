@@ -1,3 +1,5 @@
+import {exportReportText, exportReportLabel, exportReportCards, exportReportBoolean} from './exportReportLabels.js';
+
 const SECRET_PATTERNS = [
   [/[A-Z]:\\[^\s"',，。；;]+/gi, '[local-path-removed]'],
   [/\b[\w.-]*\.sqlite\b/gi, '[sqlite-path-removed]'],
@@ -60,34 +62,35 @@ function imageCount(payload = {}) {
   return Number(Boolean(payload.images?.main)) + asArray(payload.images?.gallery).length;
 }
 
-export function getUploadPayloadDisplayModel(preview) {
+export function getUploadPayloadDisplayModel(preview, t) {
   if (!preview) {
     return {
-      emptyText: '暂无 Payload 预览。请先点击“生成 Payload 预览”。',
+      emptyText: exportReportText(t, '暂无 Payload 预览。请先点击“生成 Payload 预览”。'),
       summaryCards: [],
       platformRows: [],
       skuRows: [],
       blockedText: '',
       warningText: '',
       recommendationText: '',
-      notice: uploadPayloadNotice
+      notice: exportReportText(t, uploadPayloadNotice)
     };
   }
   const summary = preview.summary || {};
   return {
     emptyText: '',
-    notice: uploadPayloadNotice,
-    summaryCards: [
+    notice: exportReportText(t, uploadPayloadNotice),
+    summaryCards: exportReportCards([
       { label: 'total SKU', value: String(summary.totalSku || 0) },
       { label: 'ready payload', value: String(summary.readyPayloadCount || 0) },
       { label: 'warning payload', value: String(summary.warningPayloadCount || 0) },
       { label: 'blocked payload', value: String(summary.blockedPayloadCount || 0) },
       { label: 'missing fields', value: String(summary.missingFieldCount || 0) },
       { label: 'mock images', value: String(summary.mockImagePayloadCount || 0) }
-    ],
-    platformRows: asArray(preview.platformPayloads).map(sanitizeForDisplay),
+    ], t),
+    platformRows: asArray(preview.platformPayloads).map(row=>({...sanitizeForDisplay(row),statusDisplay:exportReportLabel('status',row.status,t)})),
     skuRows: asArray(preview.skuPayloads).map((row) => ({
       ...sanitizeForDisplay(row),
+      statusDisplay: exportReportLabel('status',row.status,t),
       fieldSummary: payloadFields(row.payload || {}),
       imageCount: imageCount(row.payload || {}),
       missingFieldsText: asArray(row.missingFields).join(', ') || '-',
@@ -101,35 +104,36 @@ export function getUploadPayloadDisplayModel(preview) {
   };
 }
 
-export function getUploadSandboxDisplayModel(report) {
+export function getUploadSandboxDisplayModel(report, t) {
   if (!report) {
     return {
-      emptyText: '暂无沙盒模拟结果。请先点击“执行沙盒提交模拟”。',
+      emptyText: exportReportText(t, '暂无沙盒模拟结果。请先点击“执行沙盒提交模拟”。'),
       summaryCards: [],
       resultRows: [],
       blockedText: '',
       warningText: '',
       recommendationText: '',
-      notice: uploadPayloadNotice
+      notice: exportReportText(t, uploadPayloadNotice)
     };
   }
   const summary = report.summary || {};
   return {
     emptyText: '',
-    notice: uploadPayloadNotice,
-    summaryCards: [
+    notice: exportReportText(t, uploadPayloadNotice),
+    summaryCards: exportReportCards([
       { label: 'accepted', value: String(summary.accepted || 0) },
       { label: 'accepted_with_warnings', value: String(summary.acceptedWithWarnings || 0) },
       { label: 'blocked', value: String(summary.blocked || 0) },
-      { label: 'uploaded', value: String(summary.uploaded === true) },
-      { label: 'realNetworkCalled', value: String(summary.realNetworkCalled === true) },
-      { label: 'externalApiCalled', value: String(summary.externalApiCalled === true) }
-    ],
+      { label: 'uploaded', value: exportReportBoolean(summary.uploaded === true, t) },
+      { label: 'realNetworkCalled', value: exportReportBoolean(summary.realNetworkCalled === true, t) },
+      { label: 'externalApiCalled', value: exportReportBoolean(summary.externalApiCalled === true, t) }
+    ], t),
     resultRows: asArray(report.simulatedResults).map((row) => ({
       ...sanitizeForDisplay(row),
-      uploadedText: String(row.uploaded === true),
-      realNetworkCalledText: String(row.realNetworkCalled === true),
-      externalApiCalledText: String(row.externalApiCalled === true),
+      statusDisplay: exportReportLabel('status',row.simulatedStatus ?? row.status,t),
+      uploadedText: exportReportBoolean(row.uploaded, t),
+      realNetworkCalledText: exportReportBoolean(row.realNetworkCalled, t),
+      externalApiCalledText: exportReportBoolean(row.externalApiCalled, t),
       blockingText: issueText(row.blockingIssues),
       warningText: issueText(row.warnings)
     })),

@@ -281,7 +281,7 @@ export class OpenAIBackgroundProvider {
       buffer,
       extension: 'png'
     });
-    const backgroundPath = path.join(paths.rootDir, backgroundOutput.filePath);
+    const backgroundPath = path.resolve(paths.rootDir, backgroundOutput.filePath);
     const finalOutputPath = backgroundPath.replace(/\.png$/i, '-subject-composite.png');
     const composite = await compositeProductOnBackground({
       backgroundPath,

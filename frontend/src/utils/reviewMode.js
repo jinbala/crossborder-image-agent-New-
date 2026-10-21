@@ -8,6 +8,7 @@ export function normalizeReviewMode(input) {
 
 export function normalizeReviewOptions(input = {}) {
   return {
-    mode: normalizeReviewMode(input)
+    mode: normalizeReviewMode(input),
+    ...(input?.confirmPaidApi === true ? { confirmPaidApi: true } : {})
   };
 }

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import request from 'supertest';
 import app from '../src/app.js';
-import { createBatchTask, createTask, getBatchTask, resetDatabaseForTests, paths } from '../src/services/db.js';
+import { createBatchTask, createTask, getBatchTask, updateTask, resetDatabaseForTests, paths } from '../src/services/db.js';
 
 const now = '2026-06-01T12:00:00.000Z';
 const listingDir = path.join(paths.outputDir, 'listing-csv');
@@ -12,6 +12,18 @@ const listingDir = path.join(paths.outputDir, 'listing-csv');
 beforeEach(async () => {
   await resetDatabaseForTests();
   await fs.rm(listingDir, { recursive: true, force: true });
+});
+
+test('CSV sample inclusion is a strict explicit option for both preview and export',async()=>{
+  await seedRouteBatch();await updateTask('task-listing-route',()=>({generatedImages:[{id:'sample',type:'main_image',sourceType:'realSample',platformId:'amazon',status:'succeeded',provider:'custom'}]}));
+  const absent=await request(app).get('/api/batches/batch-listing-route/listing-csv/preview').expect(200);
+  assert.ok(absent.body.preview.summary.missingRequiredFields.some(row=>row.field==='main_image'));
+  const enabled=await request(app).get('/api/batches/batch-listing-route/listing-csv/preview?includeRealSamples=true').expect(200);
+  assert.equal(enabled.body.preview.summary.missingRequiredFields.some(row=>row.field==='main_image'),false);
+  for(const [value,expected]of [[true,true],['true',false]]){
+    const result=await request(app).post('/api/batches/batch-listing-route/listing-csv').send({platforms:['amazon'],includeRealSamples:value,confirmExport:true}).expect(201);
+    const csvFile=result.body.files.find(file=>file.fileName==='amazon-listing.csv');const csv=await fs.readFile(path.join(paths.rootDir,csvFile.relativePath),'utf8');assert.equal(csv.includes('01_main.jpg'),expected);
+  }
 });
 
 async function seedRouteBatch() {

@@ -18,7 +18,8 @@ import {
   pauseBatchQueue,
   resumeBatchQueue,
   retryFailedJobs,
-  runBatchQueue
+  runBatchQueue,
+  batchQueueRuntime
 } from '../services/batchQueueService.js';
 import {
   getAllBatchAnalyticsSummary,
@@ -45,8 +46,10 @@ import {
 import { buildUploadReadinessReport } from '../services/uploadReadinessService.js';
 import { buildUploadPayloadPreview } from '../services/uploadPayloadService.js';
 import { simulateSandboxSubmit } from '../services/uploadSandboxService.js';
+import { paidProviderSummary, requirePaidConfirmation, isRealQueueMode } from '../services/paidOperationPolicy.js';
 
 const router = express.Router();
+const queueView = batchTask => ({...batchTask,runtime:batchQueueRuntime(batchTask.id)});
 
 async function requireBatch(batchId) {
   const batchTask = await getBatch(batchId);
@@ -66,9 +69,16 @@ function requireConfirmed(body = {}) {
   }
 }
 
+async function requireIdleQueue(batchId) {
+  const batch = await requireBatch(batchId);
+  if (batch.locks?.isRunning || batch.queue?.status === 'running' || batchQueueRuntime(batchId).queueActive) {
+    throw Object.assign(new Error('队列仍在运行、暂停或结束当前请求；请等待队列锁释放，再执行此批次操作。'), { statusCode: 409 });
+  }
+}
+
 router.get('/', asyncHandler(async (_req, res) => {
   const batchTasks = await listBatches();
-  res.json({ batchTasks });
+  res.json({ batchTasks: batchTasks.map(queueView) });
 }));
 
 router.post('/import-folder', asyncHandler(async (req, res) => {
@@ -194,7 +204,8 @@ router.get('/:batchId/listing-csv/preview', asyncHandler(async (req, res) => {
     preview: await buildListingCsvPreview(req.params.batchId, {
       platforms: req.query.platforms,
       includeMockImages: req.query.includeMockImages !== 'false',
-      sourcePackageId: req.query.sourcePackageId || ''
+      sourcePackageId: req.query.sourcePackageId || '',
+      includeRealSamples: req.query.includeRealSamples === 'true'
     })
   });
 }));
@@ -204,6 +215,7 @@ router.post('/:batchId/listing-csv', asyncHandler(async (req, res) => {
     platforms: req.body?.platforms,
     includeMockImages: req.body?.includeMockImages !== false,
     sourcePackageId: req.body?.sourcePackageId || '',
+    includeRealSamples: req.body?.includeRealSamples === true,
     confirmExport: req.body?.confirmExport === true
   });
   res.status(201).json(result);
@@ -267,6 +279,7 @@ router.get('/:batchId/tasks/:taskId/retry-plan', asyncHandler(async (req, res) =
 }));
 
 router.post('/:batchId/tasks/:taskId/retry', asyncHandler(async (req, res) => {
+  await requireIdleQueue(req.params.batchId);
   res.json({
     batchId: req.params.batchId,
     taskId: req.params.taskId,
@@ -295,20 +308,24 @@ router.get('/:batchId/sop/download', asyncHandler(async (req, res) => {
 
 router.get('/:batchId', asyncHandler(async (req, res) => {
   const batchTask = await requireBatch(req.params.batchId);
-  res.json({ batchTask });
+  res.json({ batchTask: queueView(batchTask) });
 }));
 
 router.post('/:batchId/recognize', asyncHandler(async (req, res) => {
+  requirePaidConfirmation(req.body, paidProviderSummary().vision.provider !== 'mock');
+  await requireIdleQueue(req.params.batchId);
   const result = await recognizeBatch(req.params.batchId);
   res.json(result);
 }));
 
 router.post('/:batchId/apply-targets', asyncHandler(async (req, res) => {
+  await requireIdleQueue(req.params.batchId);
   const result = await applyTargetsToBatch(req.params.batchId, Array.isArray(req.body?.defaultTargets) ? req.body.defaultTargets : []);
   res.json(result);
 }));
 
 router.post('/:batchId/apply-template', asyncHandler(async (req, res) => {
+  await requireIdleQueue(req.params.batchId);
   const result = await applyTemplateToBatch({
     batchId: req.params.batchId,
     templateId: req.body?.templateId
@@ -317,21 +334,27 @@ router.post('/:batchId/apply-template', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:batchId/plan', asyncHandler(async (req, res) => {
+  await requireIdleQueue(req.params.batchId);
   const result = await planBatch(req.params.batchId);
   res.json(result);
 }));
 
 router.post('/:batchId/generate', asyncHandler(async (req, res) => {
+  requirePaidConfirmation(req.body, req.body?.mode === 'real_background' || isRealQueueMode(req.body?.mode));
+  await requireIdleQueue(req.params.batchId);
   const result = await generateBatch(req.params.batchId, { mode: req.body?.mode || 'mock' });
   res.json(result);
 }));
 
 router.post('/:batchId/review', asyncHandler(async (req, res) => {
+  requirePaidConfirmation(req.body, isRealQueueMode(req.body?.mode));
+  await requireIdleQueue(req.params.batchId);
   const result = await reviewBatch(req.params.batchId, { mode: req.body?.mode || 'mock' });
   res.json(result);
 }));
 
 router.post('/:batchId/queue/start', asyncHandler(async (req, res) => {
+  requirePaidConfirmation(req.body, isRealQueueMode(req.body?.mode));
   const batchTask = await runBatchQueue({
     batchId: req.params.batchId,
     action: req.body?.action,
@@ -339,25 +362,28 @@ router.post('/:batchId/queue/start', asyncHandler(async (req, res) => {
     mode: req.body?.mode || 'mock',
     waitForCompletion: false
   });
-  res.status(202).json({ batchTask });
+  res.status(202).json({ batchTask: queueView(batchTask) });
 }));
 
 router.post('/:batchId/queue/pause', asyncHandler(async (req, res) => {
   const batchTask = await pauseBatchQueue(req.params.batchId);
-  res.json({ batchTask });
+  res.json({ batchTask: queueView(batchTask) });
 }));
 
 router.post('/:batchId/queue/resume', asyncHandler(async (req, res) => {
+  const current = await requireBatch(req.params.batchId);
+  requirePaidConfirmation(req.body, isRealQueueMode(current.queue?.mode));
   const batchTask = await resumeBatchQueue(req.params.batchId);
-  res.json({ batchTask });
+  res.json({ batchTask: queueView(batchTask) });
 }));
 
 router.post('/:batchId/queue/cancel', asyncHandler(async (req, res) => {
   const batchTask = await cancelBatchQueue(req.params.batchId);
-  res.json({ batchTask });
+  res.json({ batchTask: queueView(batchTask) });
 }));
 
 router.post('/:batchId/queue/retry-failed', asyncHandler(async (req, res) => {
+  requirePaidConfirmation(req.body, isRealQueueMode(req.body?.mode));
   const batchTask = await retryFailedJobs({
     batchId: req.params.batchId,
     action: req.body?.action,
@@ -366,7 +392,7 @@ router.post('/:batchId/queue/retry-failed', asyncHandler(async (req, res) => {
     filter: req.body?.filter || 'retryable',
     waitForCompletion: false
   });
-  res.status(202).json({ batchTask });
+  res.status(202).json({ batchTask: queueView(batchTask) });
 }));
 
 router.get('/:batchId/logs', asyncHandler(async (req, res) => {

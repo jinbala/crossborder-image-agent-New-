@@ -3,10 +3,13 @@ import fsSync from 'node:fs';
 import path from 'node:path';
 import archiver from 'archiver';
 import AdmZip from 'adm-zip';
+import Database from 'better-sqlite3';
 import { nanoid } from 'nanoid';
 import { paths, readDb, writeDb } from './db.js';
 import { getSqliteDbPath, getStorageDriver } from '../storage/index.js';
 import { SqliteStore } from '../storage/sqliteStore.js';
+import { platformBackup, restorePlatformBackup, setMeta } from './platformStore.js';
+import { beginWorkspaceRestore } from './workspaceLifecycle.js';
 
 const SNAPSHOT_ROOT = 'snapshot';
 const SNAPSHOT_METADATA = `${SNAPSHOT_ROOT}/snapshot-metadata.json`;
@@ -28,6 +31,7 @@ function normalizeOptions(options = {}) {
     includeUploads: options.includeUploads !== false,
     includeOutputs: options.includeOutputs !== false,
     includeDocs: options.includeDocs !== false,
+    includePlatformDb: options.includePlatformDb !== false,
     note: typeof options.note === 'string' ? options.note : ''
   };
 }
@@ -144,6 +148,8 @@ async function buildMetadata({ snapshotId, createdAt, options }) {
       includeDocs: options.includeDocs
     },
     safety: {
+      privateAccountDataIncluded: options.includePlatformDb,
+      encryptedShopCredentialsIncluded: options.includePlatformDb,
       envIncluded: false,
       apiKeysIncluded: false,
       nodeModulesIncluded: false
@@ -176,6 +182,10 @@ export async function createSnapshot(optionsInput = {}) {
   const createdAt = nowIso();
   const zipPath = snapshotPath(snapshotId);
   const metadata = await buildMetadata({ snapshotId, createdAt, options });
+  // SQLite serialization includes committed WAL transactions; copying only .sqlite can lose them.
+  let coreSqlite;
+  if (await pathExists(getSqliteDbPath())) { const source = new Database(getSqliteDbPath(), { readonly: true }); try { coreSqlite = source.serialize(); } finally { source.close(); } }
+  const platform = options.includePlatformDb ? platformBackup() : null;
 
   await new Promise((resolve, reject) => {
     const output = fsSync.createWriteStream(zipPath);
@@ -185,7 +195,9 @@ export async function createSnapshot(optionsInput = {}) {
     archive.pipe(output);
 
     addFileIfExists(archive, paths.dbPath, `${SNAPSHOT_ROOT}/db.json`);
-    addFileIfExists(archive, getSqliteDbPath(), `${SNAPSHOT_ROOT}/app.sqlite`);
+    if (coreSqlite) archive.append(coreSqlite, { name: `${SNAPSHOT_ROOT}/app.sqlite` });
+    if (platform) archive.append(platform, { name: `${SNAPSHOT_ROOT}/platform.sqlite` });
+    addFileIfExists(archive, path.join(paths.dataDir, 'workbench-materials.json'), `${SNAPSHOT_ROOT}/workbench-materials.json`);
     if (options.includeUploads) addDirectoryIfExists(archive, paths.uploadDir, `${SNAPSHOT_ROOT}/uploads`);
     if (options.includeOutputs) addDirectoryIfExists(archive, paths.outputDir, `${SNAPSHOT_ROOT}/outputs`);
     if (options.includeDocs) addDirectoryIfExists(archive, path.join(paths.rootDir, 'docs'), `${SNAPSHOT_ROOT}/docs`);
@@ -312,10 +324,17 @@ async function copyIfExists(source, target) {
 }
 
 export async function restoreSnapshot(snapshotId, optionsInput = {}) {
+  const release = beginWorkspaceRestore();
+  try { return await restoreSnapshotUnlocked(snapshotId, optionsInput); } finally { release(); }
+}
+
+async function restoreSnapshotUnlocked(snapshotId, optionsInput = {}) {
   const options = {
     restoreDb: optionsInput.restoreDb !== false,
     restoreJsonDb: optionsInput.restoreJsonDb !== false,
     restoreSqliteDb: optionsInput.restoreSqliteDb === true,
+    restorePlatformDb: optionsInput.restorePlatformDb === true,
+    restoreMaterials: optionsInput.restoreMaterials === true,
     restoreUploads: optionsInput.restoreUploads !== false,
     restoreOutputs: optionsInput.restoreOutputs !== false,
     restoreDocs: optionsInput.restoreDocs === true,
@@ -327,6 +346,9 @@ export async function restoreSnapshot(snapshotId, optionsInput = {}) {
     error.statusCode = 400;
     throw error;
   }
+  if (options.restorePlatformDb && optionsInput.confirmRevokeAuthorizations !== true) throw Object.assign(new Error('恢复账号与授权数据需要确认：所有会话、设备和 ERP/店铺授权将停用，需重新登录与绑定'), { statusCode: 400 });
+  const active = await readDb();
+  if (active.batchTasks.some((item) => item.queue?.status === 'running')) throw Object.assign(new Error('仍有运行中的队列，请暂停并等待当前条目完成后恢复'), { statusCode: 409 });
   const { filePath, metadata } = await validateSnapshot(snapshotId);
   let preRestoreSnapshot = null;
   if (options.createBackupBeforeRestore) {
@@ -345,9 +367,14 @@ export async function restoreSnapshot(snapshotId, optionsInput = {}) {
     const zip = new AdmZip(filePath);
     zip.extractAllTo(extractDir, true);
     const snapshotRoot = path.join(extractDir, SNAPSHOT_ROOT);
+    for (const [selected, name] of [[options.restoreDb && options.restoreJsonDb, 'db.json'], [options.restoreSqliteDb, 'app.sqlite'], [options.restorePlatformDb, 'platform.sqlite'], [options.restoreMaterials, 'workbench-materials.json']]) {
+      if (selected && !await pathExists(path.join(snapshotRoot, name))) throw Object.assign(new Error(`快照缺少所选恢复项 ${name}，当前数据未修改；请取消该项后重试`), { statusCode: 400 });
+    }
     const restored = {
       db: false,
       sqlite: false,
+      platform: false,
+      materials: false,
       uploads: false,
       outputs: false,
       docs: false
@@ -362,10 +389,17 @@ export async function restoreSnapshot(snapshotId, optionsInput = {}) {
     if (options.restoreSqliteDb) {
       const sqliteSource = path.join(snapshotRoot, 'app.sqlite');
       if (!(await pathExists(sqliteSource))) throw Object.assign(new Error('Snapshot app.sqlite is missing'), { statusCode: 400 });
-      await fs.mkdir(path.dirname(getSqliteDbPath()), { recursive: true });
-      await fs.copyFile(sqliteSource, getSqliteDbPath());
+      const source = new SqliteStore({ dbPath: sqliteSource }), target = new SqliteStore({ dbPath: getSqliteDbPath() });
+      try { await target.saveDb(await source.getDb()); } finally { source.close(); target.close(); }
+      setMeta('core-index-dirty', true);
       restored.sqlite = true;
     }
+    if (options.restorePlatformDb) {
+      const source = path.join(snapshotRoot, 'platform.sqlite');
+      if (!await pathExists(source)) throw Object.assign(new Error('快照不含账号工作空间数据'), { statusCode: 400 });
+      restorePlatformBackup(source); restored.platform = true;
+    }
+    if (options.restoreMaterials) restored.materials = await copyIfExists(path.join(snapshotRoot, 'workbench-materials.json'), path.join(paths.dataDir, 'workbench-materials.json'));
     if (options.restoreUploads) restored.uploads = await copyIfExists(path.join(snapshotRoot, 'uploads'), paths.uploadDir);
     if (options.restoreOutputs) restored.outputs = await copyIfExists(path.join(snapshotRoot, 'outputs'), paths.outputDir);
     if (options.restoreDocs) restored.docs = await copyIfExists(path.join(snapshotRoot, 'docs'), path.join(paths.rootDir, 'docs'));

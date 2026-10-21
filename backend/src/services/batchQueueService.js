@@ -1,7 +1,10 @@
 import { nanoid } from 'nanoid';
+import fs from 'node:fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { resourceWorkerLimit } from './resourcePolicy.js';
 import { BATCH_STATUS, aggregateBatchStatus } from '../constants/batchStatus.js';
 import { TASK_STATUS } from '../constants/taskStatus.js';
-import { getBatchTask, getTask, updateBatchTask, updateTask } from './db.js';
+import { getBatchTask, getTask, updateBatchTask, updateTask, paths } from './db.js';
 import { defaultBatchLocks, defaultBatchQueue, getBatch, normalizeBatchTask } from './batchTaskService.js';
 import { getProviders } from '../providers/index.js';
 import { getReviewProvider } from '../providers/review/index.js';
@@ -14,6 +17,22 @@ import { getUserSettings } from './userSettingsService.js';
 import { normalizeTargets } from './targetService.js';
 
 const controllers = new Map();
+export function batchQueueRuntime(batchId) { return { queueActive: controllers.get(batchId)?.active === true }; }
+const attemptContext = new AsyncLocalStorage();
+
+function assertAttemptActive() {
+  if (!attemptContext.getStore()?.expired) return;
+  throw Object.assign(new Error('该 SKU 请求已超时，迟到结果不会写入任务。'), { code: 'JOB_TIMEOUT' });
+}
+
+function updateQueueTask(taskId, updater) {
+  assertAttemptActive();
+  return updateTask(taskId, (current) => {
+    // The database mutation may itself have waited behind another writer.
+    assertAttemptActive();
+    return updater(current);
+  });
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -114,7 +133,9 @@ async function writeQueueState(batchId, patch = {}) {
 }
 
 async function setSkuQueueState(batchId, skuId, patch, queuePatch = {}) {
+  assertAttemptActive();
   return updateBatchTask(batchId, (current) => {
+    assertAttemptActive();
     const normalized = normalizeBatchTask(current);
     const skuTasks = (normalized.skuTasks || []).map((sku) => (
       sku.skuId === skuId
@@ -129,12 +150,17 @@ async function setSkuQueueState(batchId, skuId, patch, queuePatch = {}) {
         ...counts,
         ...queuePatch
       },
-      status: aggregateBatchStatus(skuTasks, normalized.status)
+      status: normalized.queue.status === 'cancelled' ? BATCH_STATUS.CANCELLED : aggregateBatchStatus(skuTasks, normalized.status)
     };
   });
 }
 
-async function acquireLock(batchId, { action, concurrency, lockId }) {
+async function acquireLock(batchId, { action, concurrency, lockId, mode }) {
+  if (controllers.has(batchId)) {
+    const error = new Error('Batch queue is already running or draining');
+    error.statusCode = 409;
+    throw error;
+  }
   const config = batchQueueConfig();
   const now = Date.now();
   const lockedAt = new Date(now).toISOString();
@@ -169,6 +195,7 @@ async function acquireLock(batchId, { action, concurrency, lockId }) {
         ...defaultBatchQueue(),
         ...normalized.queue,
         action,
+        mode,
         status: 'running',
         concurrency,
         startedAt: lockedAt,
@@ -200,7 +227,7 @@ async function releaseLock(batchId, { action, cancelled = false } = {}) {
         status,
         finishedAt: nowIso()
       },
-      status: status === 'completed' ? aggregateBatchStatus(normalized.skuTasks || [], BATCH_STATUS.COMPLETED) : BATCH_STATUS.PARTIAL_FAILED
+      status: cancelled ? BATCH_STATUS.CANCELLED : status === 'completed' ? aggregateBatchStatus(normalized.skuTasks || [], BATCH_STATUS.COMPLETED) : BATCH_STATUS.PARTIAL_FAILED
     };
   });
   await appendLog(batchId, { level: cancelled ? 'warn' : 'success', action, message: cancelled ? '队列已取消。' : '队列执行完成。' });
@@ -249,7 +276,7 @@ async function executeRecognize(task, { mode = 'mock' } = {}) {
   const productInfoForForm = productInfoRawWithNotes.name
     ? productInfoRawWithNotes
     : toLegacyProductInfo(productInfoRawWithNotes, visibleText, risks);
-  return updateTask(task.id, () => ({
+  return updateQueueTask(task.id, () => ({
     productInfoRaw: productInfoRawWithNotes,
     productInfo: productInfoForForm,
     visibleText,
@@ -269,20 +296,6 @@ async function executeRecognize(task, { mode = 'mock' } = {}) {
   }));
 }
 
-function productInfoForConfirmation(task = {}, sku = {}) {
-  const raw = task.productInfo || toLegacyProductInfo(task.productInfoRaw || {}, task.visibleText || [], task.risks || []);
-  const name = raw.name || raw.productName || task.productInfoRaw?.productName || sku.displayName || sku.skuId || task.sku || 'Imported SKU';
-  return {
-    ...raw,
-    name,
-    sku: raw.sku || task.sku || sku.skuId || '',
-    category: raw.category || task.category || 'general',
-    packageIncluded: raw.packageIncluded || raw.packageList || [],
-    packageList: raw.packageList || raw.packageIncluded || [],
-    sellingPoints: raw.sellingPoints || []
-  };
-}
-
 async function executePrepare({ task, sku, batchId, defaultTargets = [], mode = 'mock' }) {
   let current = task;
 
@@ -292,14 +305,9 @@ async function executePrepare({ task, sku, batchId, defaultTargets = [], mode = 
   }
 
   if (current.status === TASK_STATUS.RECOGNIZED) {
-    const productInfoConfirmed = productInfoForConfirmation(current, sku);
-    await setSkuQueueState(batchId, sku.skuId, { status: 'confirmed', currentStep: 'confirmed' });
-    current = await updateTask(current.id, () => ({
-      productInfoConfirmed,
-      productInfo: productInfoConfirmed,
-      sku: productInfoConfirmed.sku || current.sku,
-      status: TASK_STATUS.CONFIRMED
-    }));
+    // Recognition is evidence, not human approval. Never promote AI fields to
+    // confirmed product data merely because the batch prepare button was used.
+    return current;
   }
 
   if (current.status === TASK_STATUS.CONFIRMED) {
@@ -310,7 +318,7 @@ async function executePrepare({ task, sku, batchId, defaultTargets = [], mode = 
     });
     const primaryTarget = targets[0];
     await setSkuQueueState(batchId, sku.skuId, { status: 'rules_selected', currentStep: 'rules_selected' });
-    current = await updateTask(current.id, () => ({
+    current = await updateQueueTask(current.id, () => ({
       targets,
       platform: primaryTarget.platformName,
       platformId: primaryTarget.platformId,
@@ -332,7 +340,7 @@ async function executePrepare({ task, sku, batchId, defaultTargets = [], mode = 
 
 async function executePlan(task) {
   const imagePlans = generateImagePlans(task);
-  return updateTask(task.id, () => ({
+  return updateQueueTask(task.id, () => ({
     imagePlans,
     generatedImages: [],
     reviewResults: [],
@@ -384,6 +392,7 @@ async function executeGenerate(task, { mode = 'mock', batchId = null, sku = null
     let lastResult = null;
     let lastError = null;
     while (retryCount <= maxRetriesPerImage) {
+      assertAttemptActive();
       try {
         lastResult = await providers.image.generate({ task, plan, outputIndex: index + 1, mode: imageGenerationMode(mode) });
         if (lastResult.status === 'succeeded') break;
@@ -392,10 +401,12 @@ async function executeGenerate(task, { mode = 'mock', batchId = null, sku = null
         lastError = { code: error.code || 'IMAGE_GENERATION_FAILED', message: error.message };
         lastResult = { provider: 'unknown', model: 'unknown', durationMs: null, data: null };
       }
+      assertAttemptActive();
       if (retryCount >= maxRetriesPerImage) break;
       retryCount += 1;
     }
 
+    assertAttemptActive();
     if (lastResult?.status === 'succeeded') {
       generatedImages.push(planImageMetadata({
         task,
@@ -438,7 +449,7 @@ async function executeGenerate(task, { mode = 'mock', batchId = null, sku = null
     }
   }
   if (plans.length > 0 && failedCount === plans.length) {
-    await updateTask(task.id, () => ({
+    await updateQueueTask(task.id, () => ({
       generatedImages,
       reviewResults: [],
       review: null,
@@ -460,7 +471,7 @@ async function executeGenerate(task, { mode = 'mock', batchId = null, sku = null
     error.generatedImages = generatedImages;
     throw error;
   }
-  return updateTask(task.id, () => ({
+  return updateQueueTask(task.id, () => ({
     generatedImages,
     reviewResults: [],
     review: null,
@@ -485,9 +496,11 @@ async function executeReview(task, { mode = 'mock' } = {}) {
   const mockReviewProvider = getReviewProvider('mock');
   const reviewResults = [];
   for (const image of task.generatedImages || []) {
+    assertAttemptActive();
     const plan = (task.imagePlans || []).find((item) => item.id === image.planId);
     const generationRequest = image.generationRequest || (plan ? buildGenerationRequest({ task, plan }) : null);
     let result = await reviewProvider.review({ task, image, plan, generationRequest });
+    assertAttemptActive();
     if ((result?.status !== 'success' && result?.status !== 'succeeded') && providerMode(mode) === 'real-test') {
       result = await mockReviewProvider.review({ task, image, plan, generationRequest, fallbackToMockReview: true, realReviewError: result.error });
     }
@@ -500,10 +513,11 @@ async function executeReview(task, { mode = 'mock' } = {}) {
     overallStatus: reviewResults.every((item) => item.status === 'passed') ? 'passed' : 'failed',
     items: reviewResults
   };
-  return updateTask(task.id, () => ({ reviewResults, review, status: TASK_STATUS.REVIEWED }));
+  return updateQueueTask(task.id, () => ({ reviewResults, review, status: TASK_STATUS.REVIEWED }));
 }
 
 async function executeSkuAction({ batchId, action, sku, mode, defaultTargets = [] }) {
+  assertAttemptActive();
   if (!sku.taskId) {
     return { status: 'skipped', message: 'SKU 导入失败，没有可执行 task。' };
   }
@@ -522,10 +536,11 @@ async function executeSkuAction({ batchId, action, sku, mode, defaultTargets = [
   return { status: 'completed', task: updatedTask };
 }
 
-function withTimeout(promise, timeoutMs) {
+function withTimeout(promise, timeoutMs, onTimeout = () => {}) {
   let timeoutId;
   const timeout = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
+      onTimeout();
       const error = new Error('该 SKU 处理超时，可稍后重试。');
       error.code = 'JOB_TIMEOUT';
       reject(error);
@@ -550,7 +565,7 @@ async function runSkuJobLegacy({ batchId, action, sku, mode }) {
     const taskStatus = result.task?.status || sku.status;
     await setSkuQueueState(batchId, sku.skuId, {
       status: taskStatus,
-      currentStep: action === 'recognize' && taskStatus === TASK_STATUS.RECOGNIZED ? 'waiting_confirm' : taskStatus,
+      currentStep: ['recognize', 'prepare'].includes(action) && taskStatus === TASK_STATUS.RECOGNIZED ? 'waiting_confirm' : taskStatus,
       imageCount: result.task?.sourceImages?.length ?? sku.imageCount,
       queueStatus,
       queueAction: action,
@@ -591,7 +606,7 @@ function retryDelay(config, retryCount) {
   return config.retryDelayMs;
 }
 
-async function runSkuJob({ batchId, action, sku, mode, defaultTargets = [] }) {
+async function runSkuJob({ batchId, action, sku, mode, controller, defaultTargets = [] }) {
   const started = Date.now();
   const config = batchQueueConfig();
   let retryCount = Number(sku.retryCount || 0);
@@ -606,17 +621,26 @@ async function runSkuJob({ batchId, action, sku, mode, defaultTargets = [] }) {
   await appendLog(batchId, { level: 'info', action, skuId: sku.skuId, taskId: sku.taskId, message: `${sku.skuId} 开始 ${action}` });
 
   while (true) {
+    // A scheduled retry is not an in-flight provider request. Do not issue it
+    // after pause/cancel; preserve this SKU as pending for an explicit resume.
+    if (controller?.cancelled || controller?.paused) {
+      await setSkuQueueState(batchId, sku.skuId, { queueStatus: 'pending' });
+      return;
+    }
+    let attempt;
     try {
       if (retryCount > 0) {
         await appendLog(batchId, { level: 'info', action, skuId: sku.skuId, taskId: sku.taskId, message: `${sku.skuId} retry_started: 第 ${retryCount} 次重试` });
       }
-      const result = await withTimeout(executeSkuAction({ batchId, action, sku, mode, defaultTargets }), config.jobTimeoutMs);
+      attempt = { expired: false };
+      attempt.promise = attemptContext.run(attempt, () => executeSkuAction({ batchId, action, sku, mode, defaultTargets }));
+      const result = await withTimeout(attempt.promise, config.jobTimeoutMs, () => { attempt.expired = true; });
       const durationMs = Date.now() - started;
       const queueStatus = result.status === 'skipped' ? 'skipped' : 'completed';
       const taskStatus = result.task?.status || sku.status;
       await setSkuQueueState(batchId, sku.skuId, {
         status: taskStatus,
-        currentStep: action === 'recognize' && taskStatus === TASK_STATUS.RECOGNIZED ? 'waiting_confirm' : taskStatus,
+        currentStep: ['recognize', 'prepare'].includes(action) && taskStatus === TASK_STATUS.RECOGNIZED ? 'waiting_confirm' : taskStatus,
         imageCount: result.task?.sourceImages?.length ?? sku.imageCount,
         queueStatus,
         queueAction: action,
@@ -642,8 +666,14 @@ async function runSkuJob({ batchId, action, sku, mode, defaultTargets = [] }) {
       });
       return;
     } catch (err) {
+      if (attempt?.expired) {
+        await appendLog(batchId, { level: 'warn', action, skuId: sku.skuId, taskId: sku.taskId, message: `${sku.skuId} timeout_draining: 请求已超时，等待在途请求结束；迟到结果不回写，结束前不重试、不释放队列锁。` });
+        // A timeout is not cancellation of a provider's network request. Fence
+        // its writes and drain it before a retry, another SKU, or lock release.
+        await attempt.promise.catch(() => {});
+      }
       const classifiedError = classifyError(err, { action, skuId: sku.skuId, taskId: sku.taskId });
-      const canAutoRetry = config.autoRetryEnabled &&
+      const canAutoRetry = !controller?.cancelled && !controller?.paused && config.autoRetryEnabled &&
         isRetryableError(classifiedError) &&
         config.retryableCodes.includes(classifiedError.errorCode) &&
         retryCount < config.maxRetryPerJob;
@@ -717,11 +747,12 @@ function retryFilterMatches(sku, filter = 'retryable') {
   return Boolean(sku.retryable);
 }
 
-async function processQueue({ batchId, action, concurrency, mode, controller, retryFailedOnly, retryFilter = 'retryable' }) {
+async function processQueue({ batchId, action, concurrency, mode, controller, retryFailedOnly, retryFilter = 'retryable', resumePendingOnly = false }) {
   try {
+    const disk = await fs.statfs(paths.outputDir).catch(() => null);
+    const availableDiskBytes = disk ? disk.bavail * disk.bsize : Infinity;
     let batch = await getBatchTask(batchId);
     batch = normalizeBatchTask(batch);
-    const resumePendingOnly = batch.queue?.status === 'paused';
     const jobs = (batch.skuTasks || [])
       .filter((sku) => {
         if (retryFailedOnly) return retryFilterMatches(sku, retryFilter);
@@ -738,7 +769,8 @@ async function processQueue({ batchId, action, concurrency, mode, controller, re
           : sku
       ));
       const counts = queueCounts(skuTasks, action);
-      return { skuTasks, queue: { ...normalized.queue, totalJobs: jobs.length, ...counts } };
+      const totalJobs = Object.values(counts).reduce((sum, count) => sum + count, 0);
+      return { skuTasks, queue: { ...normalized.queue, totalJobs, ...counts } };
     });
 
     let cursor = 0;
@@ -753,11 +785,11 @@ async function processQueue({ batchId, action, concurrency, mode, controller, re
           if (running === 0) resolve();
           return;
         }
-        while (running < concurrency && cursor < jobs.length && !controller.paused && !controller.cancelled) {
+        while (running < resourceWorkerLimit(concurrency, { action, availableDiskBytes }) && cursor < jobs.length && !controller.paused && !controller.cancelled) {
           const sku = jobs[cursor];
           cursor += 1;
           running += 1;
-          runSkuJob({ batchId, action, sku, mode, defaultTargets: batch.defaultTargets || [] })
+          runSkuJob({ batchId, action, sku, mode, controller, defaultTargets: batch.defaultTargets || [] })
             .catch(() => {})
             .finally(() => {
               running -= 1;
@@ -769,8 +801,7 @@ async function processQueue({ batchId, action, concurrency, mode, controller, re
       launch();
     });
 
-    const latest = normalizeBatchTask(await getBatchTask(batchId));
-    if (controller.paused) {
+    if (controller.paused && !controller.cancelled) {
       await writeQueueState(batchId, { status: 'paused', pausedAt: nowIso() });
       await appendLog(batchId, { level: 'warn', action, message: '队列已暂停，新 SKU 不再启动。' });
       return;
@@ -779,16 +810,16 @@ async function processQueue({ batchId, action, concurrency, mode, controller, re
     const finalBatch = normalizeBatchTask(await getBatchTask(batchId));
     const counts = queueCounts(finalBatch.skuTasks || [], action);
     await appendLog(batchId, {
-      level: counts.failedJobs > 0 ? 'warn' : 'success',
+      level: controller.cancelled || counts.failedJobs > 0 ? 'warn' : 'success',
       action,
-      message: `批量${action}完成：成功 ${counts.completedJobs}，失败 ${counts.failedJobs}，跳过 ${counts.skippedJobs}`
+      message: `批量${action}${controller.cancelled ? '已取消' : '完成'}：成功 ${counts.completedJobs}，失败 ${counts.failedJobs}，跳过 ${counts.skippedJobs}，未处理 ${counts.pendingJobs}`
     });
   } finally {
-    if (!controller.paused) controllers.delete(batchId);
+    if ((!controller.paused || controller.cancelled) && controllers.get(batchId) === controller) controllers.delete(batchId);
   }
 }
 
-export async function runBatchQueue({ batchId, action, concurrency, mode = 'mock', waitForCompletion = false, retryFailedOnly = false, retryFilter = 'retryable' } = {}) {
+export async function runBatchQueue({ batchId, action, concurrency, mode = 'mock', waitForCompletion = false, retryFailedOnly = false, retryFilter = 'retryable', resumePendingOnly = false } = {}) {
   if (!['recognize', 'prepare', 'plan', 'generate', 'review'].includes(action)) {
     const error = new Error('Unsupported queue action');
     error.statusCode = 400;
@@ -797,22 +828,25 @@ export async function runBatchQueue({ batchId, action, concurrency, mode = 'mock
   const lockId = `queue-${nanoid(8)}`;
   const userSettings = await getUserSettings();
   const safeConcurrency = resolveBatchConcurrency(concurrency, userSettings);
-  const batch = await acquireLock(batchId, { action, concurrency: safeConcurrency, lockId });
+  const batch = await acquireLock(batchId, { action, concurrency: safeConcurrency, lockId, mode });
   const controller = {
     batchId,
+    active: true,
     action,
     paused: false,
     cancelled: false,
     lockId
   };
   controllers.set(batchId, controller);
-  const promise = processQueue({ batchId, action, concurrency: safeConcurrency, mode, controller, retryFailedOnly, retryFilter });
+  const promise = processQueue({ batchId, action, concurrency: safeConcurrency, mode, controller, retryFailedOnly, retryFilter, resumePendingOnly });
   controller.promise = promise;
+  promise.then(() => { controller.active = false; }, () => { controller.active = false; });
   if (waitForCompletion) await promise;
   return getBatch(batchId);
 }
 
 export async function pauseBatchQueue(batchId) {
+  if ((await getBatchTask(batchId))?.queue?.status === 'cancelled') return getBatch(batchId);
   const controller = controllers.get(batchId);
   if (controller) controller.paused = true;
   const batchTask = await writeQueueState(batchId, { status: 'paused', pausedAt: nowIso() });
@@ -822,49 +856,74 @@ export async function pauseBatchQueue(batchId) {
 
 export async function resumeBatchQueue(batchId) {
   const batch = normalizeBatchTask(await getBatchTask(batchId));
-  if (!batch?.queue?.action) return getBatch(batchId);
+  if (!batch?.queue?.action || batch.queue.status === 'cancelled') return getBatch(batchId);
   const existing = controllers.get(batchId);
   if (existing) {
-    existing.paused = false;
-    await writeQueueState(batchId, { status: 'running', resumedAt: nowIso() });
-    await appendLog(batchId, { level: 'info', action: batch.queue.action, message: '队列已恢复。' });
-    processQueue({
-      batchId,
-      action: batch.queue.action,
-      concurrency: batch.queue.concurrency || batchQueueConfig().defaultConcurrency,
-      mode: 'mock',
-      controller: existing,
-      retryFailedOnly: false
-    }).catch(() => {});
-    return getBatch(batchId);
+    if (!existing.paused || existing.resuming || existing.cancelled) return getBatch(batchId);
+    existing.resuming = true;
+    try {
+      // A paused UI may still have an in-flight SKU. Drain it before resuming,
+      // otherwise a second queue can execute the same SKU concurrently.
+      await existing.promise;
+      if (existing.cancelled || controllers.get(batchId) !== existing) return getBatch(batchId);
+      existing.paused = false;
+      await writeQueueState(batchId, { status: 'running', resumedAt: nowIso() });
+      await appendLog(batchId, { level: 'info', action: batch.queue.action, message: '队列已恢复。' });
+      existing.active = true;
+      const promise = processQueue({
+        batchId,
+        action: batch.queue.action,
+        concurrency: batch.queue.concurrency || batchQueueConfig().defaultConcurrency,
+        mode: batch.queue.mode || 'mock',
+        controller: existing,
+        retryFailedOnly: false,
+        resumePendingOnly: true
+      });
+      existing.promise = promise;
+      promise.then(() => { existing.active = false; }, () => { existing.active = false; });
+      return getBatch(batchId);
+    } finally { existing.resuming = false; }
   }
   await updateBatchTask(batchId, () => ({ locks: defaultBatchLocks() }));
   return runBatchQueue({
     batchId,
     action: batch.queue.action,
     concurrency: batch.queue.concurrency,
-    mode: 'mock',
-    waitForCompletion: false
+    mode: batch.queue.mode || 'mock',
+    waitForCompletion: false,
+    resumePendingOnly: true
   });
 }
 
-export async function cancelBatchQueue(batchId) {
+export async function cancelBatchQueue(batchId, { waitForCompletion = false } = {}) {
   const controller = controllers.get(batchId);
   if (controller) controller.cancelled = true;
   const batchTask = await updateBatchTask(batchId, (current) => {
     const normalized = normalizeBatchTask(current);
     return {
-      locks: defaultBatchLocks(),
+      locks: controller ? normalized.locks : defaultBatchLocks(),
       queue: {
         ...normalized.queue,
         status: 'cancelled',
-        finishedAt: nowIso()
+        finishedAt: controller ? null : nowIso()
       },
       status: BATCH_STATUS.CANCELLED
     };
   });
-  await appendLog(batchId, { level: 'warn', action: batchTask.queue?.action, message: '队列已取消。' });
-  controllers.delete(batchId);
+  await appendLog(batchId, { level: 'warn', action: batchTask.queue?.action, message: controller ? '已请求取消，不再启动新 SKU 或重试；当前请求结束后释放队列锁。' : '队列已取消。' });
+  if (controller) {
+    const drain = controller.drainPromise ||= (async () => {
+      await controller.promise;
+      // An already-paused controller has finished its loop but still owns its
+      // lock. Live loops release their own lock before removing the controller.
+      if (controllers.get(batchId) === controller) {
+        await releaseLock(batchId, { action: controller.action, cancelled: true });
+        controllers.delete(batchId);
+      }
+    })();
+    drain.catch(() => {});
+    if (waitForCompletion) await drain;
+  }
   return getBatch(batchId);
 }
 

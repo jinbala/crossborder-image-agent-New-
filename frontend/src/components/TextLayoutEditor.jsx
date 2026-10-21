@@ -1,3 +1,4 @@
+import { useLocale } from '../i18n/LocaleProvider.jsx';
 import { useEffect, useMemo, useState } from 'react';
 
 function cloneLayout(layout) {
@@ -27,6 +28,7 @@ function canvasScale(canvas) {
 }
 
 export default function TextLayoutEditor({ layout, onSave, onRestore, onRegenerate, saving = false }) {
+  const { t } = useLocale();
   const [draft, setDraft] = useState(() => ensureArrays(cloneLayout(layout)));
   const [selectedKey, setSelectedKey] = useState('');
   const [dragging, setDragging] = useState(null);
@@ -200,9 +202,9 @@ export default function TextLayoutEditor({ layout, onSave, onRestore, onRegenera
 
       <div className="space-y-3 text-xs">
         <div className="grid grid-cols-3 gap-2">
-          <div className="rounded border border-slate-200 bg-slate-50 p-2">文字 {draft.textElements.length}</div>
-          <div className="rounded border border-slate-200 bg-slate-50 p-2">图标 {draft.iconElements.length}</div>
-          <div className="rounded border border-slate-200 bg-slate-50 p-2">线条 {draft.lineElements.length}</div>
+          <div className="rounded border border-slate-200 bg-slate-50 p-2">{t("文字") + " "}{draft.textElements.length}</div>
+          <div className="rounded border border-slate-200 bg-slate-50 p-2">{t("图标") + " "}{draft.iconElements.length}</div>
+          <div className="rounded border border-slate-200 bg-slate-50 p-2">{t("线条") + " "}{draft.lineElements.length}</div>
         </div>
 
         <select
@@ -210,29 +212,29 @@ export default function TextLayoutEditor({ layout, onSave, onRestore, onRegenera
           onChange={(event) => setSelectedKey(event.target.value)}
           className="w-full rounded border border-slate-300 bg-white px-2 py-2"
         >
-          <option value="">选择要编辑的元素</option>
-          {draft.textElements.map((item) => <option key={item.id} value={elementKey('text', item.id)}>文字：{item.text || item.id}</option>)}
-          {draft.iconElements.map((item) => <option key={item.id} value={elementKey('icon', item.id)}>图标：{item.label || item.id}</option>)}
-          {draft.lineElements.map((item) => <option key={item.id} value={elementKey('line', item.id)}>线条：{item.label || item.id}</option>)}
+          <option value="">{t("选择要编辑的元素")}</option>
+          {draft.textElements.map((item) => <option key={item.id} value={elementKey('text', item.id)}>{t("文字：")}{item.text || item.id}</option>)}
+          {draft.iconElements.map((item) => <option key={item.id} value={elementKey('icon', item.id)}>{t("图标：")}{item.label || item.id}</option>)}
+          {draft.lineElements.map((item) => <option key={item.id} value={elementKey('line', item.id)}>{t("线条：")}{item.label || item.id}</option>)}
         </select>
 
         {selected && (
           <div className="space-y-2 rounded border border-slate-200 bg-white p-3">
             {'text' === selectedKind() && (
               <label className="block">
-                <span className="font-medium text-slate-600">文字内容</span>
+                <span className="font-medium text-slate-600">{t("文字内容")}</span>
                 <textarea className="mt-1 min-h-16 w-full rounded border border-slate-300 px-2 py-1" value={selected.text || ''} onChange={(event) => updateSelected({ text: event.target.value })} />
               </label>
             )}
             {'icon' === selectedKind() && (
               <label className="block">
-                <span className="font-medium text-slate-600">图标标签</span>
+                <span className="font-medium text-slate-600">{t("图标标签")}</span>
                 <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1" value={selected.label || ''} onChange={(event) => updateSelected({ label: event.target.value })} />
               </label>
             )}
             {'line' === selectedKind() && (
               <label className="block">
-                <span className="font-medium text-slate-600">线条标签</span>
+                <span className="font-medium text-slate-600">{t("线条标签")}</span>
                 <input className="mt-1 w-full rounded border border-slate-300 px-2 py-1" value={selected.label || ''} onChange={(event) => updateSelected({ label: event.target.value })} />
               </label>
             )}
@@ -241,8 +243,8 @@ export default function TextLayoutEditor({ layout, onSave, onRestore, onRegenera
               <div className="grid grid-cols-2 gap-2">
                 <label>X<input type="number" className="mt-1 w-full rounded border border-slate-300 px-2 py-1" value={selected.x || 0} onChange={(event) => updateSelected({ x: Number(event.target.value) })} /></label>
                 <label>Y<input type="number" className="mt-1 w-full rounded border border-slate-300 px-2 py-1" value={selected.y || 0} onChange={(event) => updateSelected({ y: Number(event.target.value) })} /></label>
-                {'text' === selectedKind() && <label>字号<input type="number" className="mt-1 w-full rounded border border-slate-300 px-2 py-1" value={selected.fontSize || 32} onChange={(event) => updateSelected({ fontSize: Number(event.target.value) })} /></label>}
-                {'icon' === selectedKind() && <label>大小<input type="number" className="mt-1 w-full rounded border border-slate-300 px-2 py-1" value={selected.size || 60} onChange={(event) => updateSelected({ size: Number(event.target.value) })} /></label>}
+                {'text' === selectedKind() && <label>{t("字号")}<input type="number" className="mt-1 w-full rounded border border-slate-300 px-2 py-1" value={selected.fontSize || 32} onChange={(event) => updateSelected({ fontSize: Number(event.target.value) })} /></label>}
+                {'icon' === selectedKind() && <label>{t("大小")}<input type="number" className="mt-1 w-full rounded border border-slate-300 px-2 py-1" value={selected.size || 60} onChange={(event) => updateSelected({ size: Number(event.target.value) })} /></label>}
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-2">
@@ -254,33 +256,31 @@ export default function TextLayoutEditor({ layout, onSave, onRestore, onRegenera
 
             {'text' === selectedKind() && (
               <label className="block">
-                <span className="font-medium text-slate-600">对齐方式</span>
+                <span className="font-medium text-slate-600">{t("对齐方式")}</span>
                 <select className="mt-1 w-full rounded border border-slate-300 px-2 py-1" value={selected.align || 'left'} onChange={(event) => updateSelected({ align: event.target.value })}>
-                  <option value="left">左对齐</option>
-                  <option value="center">居中</option>
-                  <option value="right">右对齐</option>
+                  <option value="left">{t("左对齐")}</option>
+                  <option value="center">{t("居中")}</option>
+                  <option value="right">{t("右对齐")}</option>
                 </select>
               </label>
             )}
 
             <div className="grid grid-cols-3 gap-2">
               <label className="flex items-center gap-2 rounded border border-slate-200 px-2 py-1">
-                <input type="checkbox" checked={selected.visible !== false} onChange={(event) => updateSelected({ visible: event.target.checked })} />
-                显示
-              </label>
-              <button type="button" className="rounded border border-slate-300 px-2 py-1" onClick={() => updateSelected({ zIndex: (selected.zIndex || 1) + 1 })}>上移层级</button>
-              <button type="button" className="rounded border border-slate-300 px-2 py-1" onClick={() => updateSelected({ zIndex: Math.max(0, (selected.zIndex || 1) - 1) })}>下移层级</button>
+                <input type="checkbox" checked={selected.visible !== false} onChange={(event) => updateSelected({ visible: event.target.checked })} />{t("显示")}</label>
+              <button type="button" className="rounded border border-slate-300 px-2 py-1" onClick={() => updateSelected({ zIndex: (selected.zIndex || 1) + 1 })}>{t("上移层级")}</button>
+              <button type="button" className="rounded border border-slate-300 px-2 py-1" onClick={() => updateSelected({ zIndex: Math.max(0, (selected.zIndex || 1) - 1) })}>{t("下移层级")}</button>
             </div>
-            <button type="button" className="rounded border border-red-200 bg-red-50 px-3 py-1 text-red-700" onClick={() => deleteElement(selectedKind(), selected.id)}>隐藏/删除元素</button>
+            <button type="button" className="rounded border border-red-200 bg-red-50 px-3 py-1 text-red-700" onClick={() => deleteElement(selectedKind(), selected.id)}>{t("隐藏/删除元素")}</button>
           </div>
         )}
 
         <div className="flex flex-wrap gap-2">
           <button type="button" disabled={saving} onClick={() => onSave?.(draft)} className="rounded bg-ink px-3 py-2 text-white disabled:opacity-60">
-            {saving ? '正在保存...' : '保存布局'}
+            {saving ? t("正在保存...") : t("保存布局")}
           </button>
-          {onRegenerate && <button type="button" onClick={() => onRegenerate(draft)} className="rounded border border-coral px-3 py-2 text-coral">使用当前排版重新生成</button>}
-          <button type="button" onClick={onRestore} className="rounded border border-slate-300 px-3 py-2 text-slate-700">恢复自动布局</button>
+          {onRegenerate && <button type="button" onClick={() => onRegenerate(draft)} className="rounded border border-coral px-3 py-2 text-coral">{t("使用当前排版重新生成")}</button>}
+          <button type="button" onClick={onRestore} className="rounded border border-slate-300 px-3 py-2 text-slate-700">{t("恢复自动布局")}</button>
         </div>
       </div>
     </div>

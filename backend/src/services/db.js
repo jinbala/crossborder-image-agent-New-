@@ -2,6 +2,8 @@ import { ensureBaseStoragePaths, paths } from './dbPaths.js';
 import { getSqliteDbPath, getStorageDriver, getStore, resetStoreForTests as resetActiveStoreForTests } from '../storage/index.js';
 import { migrateJsonToSqlite } from '../storage/migrations.js';
 import fs from 'node:fs/promises';
+import { meta, setMeta } from './platformStore.js';
+import { resourceVisible, assertResource, claimResource, registerTaskAssets } from './ownershipService.js';
 let mutationQueue = Promise.resolve();
 
 export { paths };
@@ -33,7 +35,10 @@ export async function readDb() {
 
 export async function writeDb(db) {
   await ensureStorage();
-  return getStore().saveDb(db);
+  const saved = await getStore().saveDb(db);
+  setMeta('core-index-dirty', true);
+  setMeta('core-index-revision', meta('core-index-revision', 0) + 1);
+  return saved;
 }
 
 async function withDbMutation(mutator) {
@@ -52,17 +57,18 @@ export async function resetDatabaseForTests() {
 
 export async function listTasks() {
   const db = await readDb();
-  return db.tasks.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  return db.tasks.filter((task) => resourceVisible('image', task.id)).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 }
 
 export async function getTask(taskId) {
   const db = await readDb();
-  return db.tasks.find((task) => task.id === taskId) || null;
+  return resourceVisible('image', taskId) ? db.tasks.find((task) => task.id === taskId) || null : null;
 }
 
 export async function createTask(task) {
   return withDbMutation(async () => {
     const db = await readDb();
+    registerTaskAssets(task);
     db.tasks.push(task);
     await writeDb(db);
     return task;
@@ -71,6 +77,7 @@ export async function createTask(task) {
 
 export async function updateTask(taskId, updater) {
   return withDbMutation(async () => {
+    assertResource('image', taskId);
     const db = await readDb();
     const index = db.tasks.findIndex((task) => task.id === taskId);
     if (index === -1) {
@@ -92,17 +99,18 @@ export async function updateTask(taskId, updater) {
 
 export async function listBatchTasks() {
   const db = await readDb();
-  return db.batchTasks.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  return db.batchTasks.filter((task) => resourceVisible('batch', task.id)).sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 }
 
 export async function getBatchTask(batchId) {
   const db = await readDb();
-  return db.batchTasks.find((batchTask) => batchTask.id === batchId) || null;
+  return resourceVisible('batch', batchId) ? db.batchTasks.find((batchTask) => batchTask.id === batchId) || null : null;
 }
 
 export async function createBatchTask(batchTask) {
   return withDbMutation(async () => {
     const db = await readDb();
+    claimResource('batch', batchTask.id);
     db.batchTasks.push(batchTask);
     await writeDb(db);
     return batchTask;
@@ -111,6 +119,7 @@ export async function createBatchTask(batchTask) {
 
 export async function updateBatchTask(batchId, updater) {
   return withDbMutation(async () => {
+    assertResource('batch', batchId);
     const db = await readDb();
     const index = db.batchTasks.findIndex((batchTask) => batchTask.id === batchId);
     if (index === -1) {
@@ -132,6 +141,7 @@ export async function updateBatchTask(batchId, updater) {
 
 export async function deleteBatchTaskRecord(batchId, { deleteTasks = true, resetImportedFolders = true } = {}) {
   return withDbMutation(async () => {
+    assertResource('batch', batchId);
     const db = await readDb();
     const batch = db.batchTasks.find((batchTask) => batchTask.id === batchId);
     if (!batch) {
@@ -193,11 +203,12 @@ export async function removeImportedFoldersForBatch(batchId) {
 
 export async function listWorkflowTemplates() {
   const db = await readDb();
-  return Array.isArray(db.workflowTemplates) ? db.workflowTemplates : [];
+  return Array.isArray(db.workflowTemplates) ? db.workflowTemplates.filter((item) => resourceVisible('workflow', item.id)) : [];
 }
 
 export async function createWorkflowTemplate(template) {
   return withDbMutation(async () => {
+    claimResource('workflow', template.id);
     const db = await readDb();
     db.workflowTemplates = Array.isArray(db.workflowTemplates) ? db.workflowTemplates : [];
     db.workflowTemplates.push(template);
@@ -208,6 +219,7 @@ export async function createWorkflowTemplate(template) {
 
 export async function updateWorkflowTemplate(templateId, updater) {
   return withDbMutation(async () => {
+    assertResource('workflow', templateId);
     const db = await readDb();
     db.workflowTemplates = Array.isArray(db.workflowTemplates) ? db.workflowTemplates : [];
     const index = db.workflowTemplates.findIndex((template) => template.id === templateId);
@@ -231,6 +243,7 @@ export async function updateWorkflowTemplate(templateId, updater) {
 
 export async function deleteWorkflowTemplate(templateId) {
   return withDbMutation(async () => {
+    assertResource('workflow', templateId);
     const db = await readDb();
     db.workflowTemplates = Array.isArray(db.workflowTemplates) ? db.workflowTemplates : [];
     const before = db.workflowTemplates.length;

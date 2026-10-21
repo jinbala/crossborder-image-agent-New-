@@ -1,3 +1,4 @@
+import { useLocale } from '../i18n/LocaleProvider.jsx';
 const styles = {
   new: 'bg-emerald-50 text-emerald-700',
   uploaded: 'bg-slate-100 text-slate-700',
@@ -31,13 +32,24 @@ const labels = {
   failed: '失败',
   partial_failed: '部分失败',
   waiting_confirm: '等待确认',
-  completed: '已完成'
+  completed: '已完成',
+  draft: '草稿',
+  idle: '空闲',
+  queued: '排队中',
+  pending: '待处理',
+  running: '运行中',
+  waiting_user: '等待人工处理',
+  paused: '已暂停',
+  partial: '部分完成',
+  cancelled: '已取消',
+  cancelling: '正在取消'
 };
 
 export default function StatusBadge({ status }) {
+  const { t } = useLocale();
   return (
     <span className={`inline-flex rounded px-2.5 py-1 text-xs font-semibold ${styles[status] || styles.uploaded}`}>
-      {labels[status] || '新任务'}
+      {Object.hasOwn(labels, status) ? t(labels[status]) : status || t('新任务')}
     </span>
   );
 }

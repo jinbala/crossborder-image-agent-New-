@@ -2,9 +2,10 @@ import assert from 'node:assert/strict';
 import { beforeEach, test } from 'node:test';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createBatchTask, createTask, getBatchTask, resetDatabaseForTests, paths } from '../src/services/db.js';
+import { createBatchTask, createTask, getBatchTask, getTask, updateTask, resetDatabaseForTests, paths } from '../src/services/db.js';
 import {
   buildListingCsvPreview,
+  buildListingArtifacts,
   createListingCsvExport
 } from '../src/services/listingExportService.js';
 
@@ -123,6 +124,18 @@ async function seedBatch() {
 beforeEach(async () => {
   await resetDatabaseForTests();
   await fs.rm(listingDir, { recursive: true, force: true });
+});
+
+test('embedded package listings use captured product data and actual copied image paths, not later live edits',async()=>{
+  await seedBatch();
+  const batch=await getBatchTask('batch-listing'),tasks=await Promise.all(batch.skuTasks.filter(sku=>sku.taskId).map(sku=>getTask(sku.taskId))).then(values=>values.filter(Boolean));
+  const snapshot={batch,tasks},before=JSON.stringify(snapshot);
+  await updateTask('task-listing-a',task=>({productInfoConfirmed:{...task.productInfoConfirmed,name:'Later changed product'}}));
+  const imagePaths=new Map([['task-listing-a:amazon:main_image','Amazon/SKU001/01_main.jpg']]);
+  const captured=await buildListingArtifacts('batch-listing',{platforms:['amazon']},{snapshot,imagePaths});
+  assert.match(captured.files['amazon-listing.csv'],/Portable Drive/);assert.doesNotMatch(captured.files['amazon-listing.csv'],/Later changed product|02_feature.jpg/);
+  const current=await buildListingArtifacts('batch-listing',{platforms:['amazon']});assert.match(current.files['amazon-listing.csv'],/Later changed product/);
+  assert.equal(JSON.stringify(snapshot),before);assert.equal((await getTask('task-listing-a')).productInfoConfirmed.name,'Later changed product');
 });
 
 test('buildListingCsvPreview summarizes rows blocked fields noReview and does not write files', async () => {

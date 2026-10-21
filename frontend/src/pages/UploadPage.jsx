@@ -1,3 +1,4 @@
+import { useLocale } from '../i18n/LocaleProvider.jsx';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { UploadCloud, X } from 'lucide-react';
@@ -37,6 +38,7 @@ function validateFiles(files, existingFiles = []) {
 }
 
 export default function UploadPage() {
+  const { t } = useLocale();
   const navigate = useNavigate();
   const [files, setFiles] = useState([]);
   const [previews, setPreviews] = useState([]);
@@ -94,11 +96,11 @@ export default function UploadPage() {
   return (
     <div className="max-w-5xl space-y-5">
       <div>
-        <h1 className="text-2xl font-semibold text-ink">上传商品图片</h1>
-        <p className="mt-1 text-sm text-slate-500">可一次上传主图、参数图、尺寸图、包装图、配件图和卖点图，最多 {MAX_IMAGES} 张。</p>
+        <h1 className="text-2xl font-semibold text-ink">{t("上传商品图片")}</h1>
+        <p className="mt-1 text-sm text-slate-500">{t("可一次上传主图、参数图、尺寸图、包装图、配件图和卖点图，最多") + " "}{MAX_IMAGES}{" " + t("张。")}</p>
       </div>
       <ErrorMessage error={error} />
-      <Section title="商品原图">
+      <Section title={t("商品原图")}>
         <form onSubmit={submit} className="space-y-5">
           <label
             onDragOver={(event) => {
@@ -110,9 +112,9 @@ export default function UploadPage() {
             className={`focus-within:ring-mint flex min-h-48 cursor-pointer flex-col items-center justify-center rounded border border-dashed px-5 py-8 text-center focus-within:ring-2 ${dragging ? 'border-mint bg-teal-50' : 'border-slate-300 bg-slate-50'}`}
           >
             <UploadCloud className="mb-3 text-mint" size={32} />
-            <span className="font-medium text-ink">选择商品图片或拖拽到这里</span>
-            <span className="mt-1 text-sm text-slate-500">支持 jpg、jpeg、png、webp；单张不超过 10MB，总量不超过 100MB。</span>
-            <span className="mt-2 text-sm font-semibold text-mint">已选择 {files.length} / {MAX_IMAGES} 张图片</span>
+            <span className="font-medium text-ink">{t("选择商品图片或拖拽到这里")}</span>
+            <span className="mt-1 text-sm text-slate-500">{t("支持 jpg、jpeg、png、webp；单张不超过 10MB，总量不超过 100MB。")}</span>
+            <span className="mt-2 text-sm font-semibold text-mint">{t("已选择") + " "}{files.length} / {MAX_IMAGES}{" " + t("张图片")}</span>
             <input className="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => addFiles(event.target.files)} />
           </label>
 
@@ -121,12 +123,12 @@ export default function UploadPage() {
               {previews.map((preview, index) => (
                 <div key={`${preview.file.name}-${index}`} className="rounded border border-slate-200 bg-white p-3">
                   <div className="relative">
-                    <img src={preview.url} alt={`商品图 ${index + 1}`} className="aspect-square w-full rounded object-contain" />
+                    <img src={preview.url} alt={t("商品图 {value0}", { value0: (index + 1) })} className="aspect-square w-full rounded object-contain" />
                     <button
                       type="button"
                       onClick={() => removeFile(index)}
                       className="focus-ring absolute right-2 top-2 grid h-8 w-8 place-items-center rounded bg-white text-slate-600 shadow hover:text-red-600"
-                      aria-label="删除图片"
+                      aria-label={t("删除图片")}
                     >
                       <X size={16} />
                     </button>
@@ -137,9 +139,7 @@ export default function UploadPage() {
             </div>
           )}
 
-          <PrimaryButton busy={busy} disabled={!files.length}>
-            上传并识别全部图片
-          </PrimaryButton>
+          <PrimaryButton busy={busy} disabled={!files.length}>{t("上传并识别全部图片")}</PrimaryButton>
         </form>
       </Section>
     </div>

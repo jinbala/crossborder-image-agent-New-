@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import request from 'supertest';
 import sharp from 'sharp';
 import app from '../src/app.js';
-import { getBatchTask, getTask, readDb, resetDatabaseForTests, updateBatchTask, updateTask } from '../src/services/db.js';
+import { paths, getBatchTask, getTask, readDb, resetDatabaseForTests, updateBatchTask, updateTask } from '../src/services/db.js';
 import { cancelBatchQueue, pauseBatchQueue, retryFailedJobs, runBatchQueue } from '../src/services/batchQueueService.js';
 import { computeBatchAnalytics } from '../src/services/batchAnalyticsService.js';
 import { getProviderCostConfig } from '../src/config/providerCostConfig.js';
@@ -20,7 +20,8 @@ import {
   listTemplates
 } from '../src/services/workflowTemplateService.js';
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+if (!process.env.CROSSBORDER_DATA_ROOT) throw new Error('端到端测试必须使用独立数据目录。请通过 npm test 运行。');
+const rootDir = paths.rootDir;
 const uploadDir = path.join(rootDir, 'uploads');
 const outputDir = path.join(rootDir, 'outputs');
 
@@ -282,6 +283,7 @@ test('real vision provider failure does not advance task state or overwrite exis
 
   await request(app)
     .post(`/api/tasks/${taskId}/recognize`)
+    .send({ confirmPaidApi: true })
     .expect(502)
     .expect((res) => {
       assert.equal(res.body.error.code, 'MISSING_API_KEY');
@@ -491,16 +493,25 @@ test('real background mode is limited to safe lifestyle images and falls back to
 
     const skippedResponse = await request(app)
       .post(`/api/tasks/${taskId}/generate/${mainPlan.id}`)
-      .send({ mode: 'real_background' })
+      .send({ mode: 'real_background', confirmPaidApi: true })
       .expect(200);
     const skippedImage = skippedResponse.body.task.generatedImages.find((image) => image.planId === mainPlan.id);
     assert.equal(skippedImage.provider, 'mock');
     assert.equal(skippedImage.realGenerationSkipped, true);
     assert.match(skippedImage.skipReason, /lifestyle_image|background_replace/);
 
+    const realTestResponse = await request(app)
+      .post(`/api/tasks/${taskId}/generate/${mainPlan.id}`)
+      .send({ mode: 'real-test', confirmPaidApi: true })
+      .expect(200);
+    const realTestImage = realTestResponse.body.task.generatedImages.find((image) => image.planId === mainPlan.id);
+    assert.equal(realTestImage.fallbackToMock, true);
+    assert.equal(realTestImage.isRealGenerated, false);
+    assert.equal(realTestImage.realGenerationError.code, 'MISSING_API_KEY');
+
     const fallbackResponse = await request(app)
       .post(`/api/tasks/${taskId}/generate/${lifestylePlan.id}`)
-      .send({ mode: 'real_background', realMode: 'text_to_image' })
+      .send({ mode: 'real_background', realMode: 'text_to_image', confirmPaidApi: true })
       .expect(200);
     const fallbackImage = fallbackResponse.body.task.generatedImages.find((image) => image.planId === lifestylePlan.id);
     assert.equal(fallbackImage.provider, 'mock');
@@ -1166,7 +1177,7 @@ test('runBatchQueue processes SKU jobs with capped concurrency and execution log
   }
 });
 
-test('runBatchQueue prepare processes every imported SKU through recognition confirmation targets and planning', async () => {
+test('runBatchQueue prepare waits for human confirmation and only then continues confirmed SKUs to planning', async () => {
   const batchRoot = path.join(os.tmpdir(), `crossborder-prepare-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await fs.mkdir(path.join(batchRoot, 'sku001-hard-drive'), { recursive: true });
   await fs.mkdir(path.join(batchRoot, 'sku002-hard-drive'), { recursive: true });
@@ -1191,9 +1202,17 @@ test('runBatchQueue prepare processes every imported SKU through recognition con
     const batch = await getBatchTask(batchId);
     const validSkus = batch.skuTasks.filter((sku) => sku.taskId);
     assert.equal(validSkus.length, 2);
-    assert.ok(validSkus.every((sku) => sku.status === 'planned'));
+    assert.ok(validSkus.every((sku) => sku.status === 'recognized' && sku.currentStep === 'waiting_confirm'));
     assert.ok(validSkus.every((sku) => sku.queueStatus === 'completed'));
     assert.ok(batch.skuTasks.some((sku) => sku.status === 'failed'));
+    for (const sku of validSkus) {
+      const task = await getTask(sku.taskId);
+      assert.equal(task.status, 'recognized');
+      assert.equal(task.productInfoConfirmed, null);
+      assert.equal(task.imagePlans.length, 0);
+      await request(app).patch(`/api/tasks/${sku.taskId}/product`).send({ productInfo: task.productInfo }).expect(200);
+    }
+    await runBatchQueue({ batchId, action: 'prepare', concurrency: 1, waitForCompletion: true });
     for (const sku of validSkus) {
       const task = await getTask(sku.taskId);
       assert.equal(task.status, 'planned');
@@ -1225,6 +1244,11 @@ test('runBatchQueue generate creates tracked images for every plan of every plan
       .expect(201);
     const batchId = importResponse.body.batchTask.id;
 
+    await runBatchQueue({ batchId, action: 'prepare', concurrency: 1, waitForCompletion: true });
+    for (const sku of (await getBatchTask(batchId)).skuTasks.filter(item => item.taskId)) {
+      const current = await getTask(sku.taskId);
+      await request(app).patch(`/api/tasks/${sku.taskId}/product`).send({ productInfo: current.productInfo }).expect(200);
+    }
     await runBatchQueue({ batchId, action: 'prepare', concurrency: 1, waitForCompletion: true });
     await runBatchQueue({ batchId, action: 'generate', concurrency: 1, mode: 'mock', waitForCompletion: true });
 

@@ -9,7 +9,7 @@ const SECRET_PATTERNS = [
 ];
 
 export const finalAcceptanceNotice = '本页面的普通验收报告只用于最终人工验收，不会调用真实 Provider，不会调用 Image2，不会上传平台，也不会修改任务数据。1 SKU 真实 API 验收专区必须三重确认后才可运行。pending / missing 项需要人工补齐，不能伪造成 passed。';
-export const finalAcceptanceIssueNotice = '验收问题记录仅保存在当前页面导出的验收报告中，不写入数据库。';
+export const finalAcceptanceIssueNotice = '验收问题和人工结论保存在当前成员的验收工作区，不修改原业务任务；请确认保存成功，版本冲突时先导出副本再重新读取。';
 
 const ISSUE_SEVERITIES = ['blocker', 'high', 'medium', 'low', 'info'];
 const ISSUE_STATUSES = ['open', 'investigating', 'fixed', 'verified', 'wontFix'];

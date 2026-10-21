@@ -1,3 +1,4 @@
+import { exportTargetsForPlatform, exportImageKey, structuredTargetFolder, latestImagesForExportTarget, exportImageExclusion } from '../../../frontend/src/utils/exportTargets.js';
 import {
   IMAGE_TYPE_ORDER,
   asArray,
@@ -6,7 +7,6 @@ import {
   sanitizeText,
   sanitizeValue,
   skuValue,
-  sourceTypeForImage,
   toCsv
 } from './exportManifestService.js';
 
@@ -121,31 +121,13 @@ function joinSafeList(value) {
   return items.join('; ');
 }
 
-function imageTypeOf(image = {}) {
-  return image.imageType || image.type || image.mockPreview?.type || image.mockPreview?.template?.templateType || '';
-}
-
-function imagePlatformId(image = {}, task = {}) {
-  if (image.platformId || image.platform) return String(image.platformId || image.platform).toLowerCase();
-  return String(task.platformId || task.platform || 'amazon').toLowerCase();
-}
-
-function imageMap(task = {}, platformId = 'amazon', includeMockImages = true) {
-  const map = new Map();
-  for (const image of asArray(task.generatedImages)) {
-    if (image.status && !['succeeded', 'success', 'completed'].includes(image.status)) continue;
-    if (imagePlatformId(image, task) !== platformId) continue;
-    if (sourceTypeForImage(image) === 'mock' && !includeMockImages) continue;
-    map.set(imageTypeOf(image), image);
-  }
-  return map;
-}
-
-function imagePath(task = {}, skuTask = {}, platformId, imageType, includeMockImages) {
-  const images = imageMap(task, platformId, includeMockImages);
-  if (!images.has(imageType)) return '';
+function imagePath(task = {}, skuTask = {}, platformId, imageType, options, imagePaths, target) {
+  const siblings = exportTargetsForPlatform(task, platformId);
+  if (imagePaths instanceof Map) return imagePaths.get(exportImageKey(task.id, target.id, imageType)) || (siblings.length === 1 ? imagePaths.get(`${task.id}:${platformId}:${imageType}`) : '') || '';
+  const image = latestImagesForExportTarget(task, target).get(imageType);
+  if (!image || exportImageExclusion(image, options)) return '';
   const fileName = IMAGE_TYPE_ORDER.find(([type]) => type === imageType)?.[1] || `${safeSegment(imageType, 'image')}.jpg`;
-  return `${platformFolder(platformId)}/${safeSegment(skuValue(task, skuTask), 'SKU')}/${fileName}`;
+  return [platformFolder(platformId), safeSegment(skuValue(task, skuTask), 'SKU'), structuredTargetFolder(target, siblings), fileName].filter(Boolean).join('/');
 }
 
 function recognitionStatus(task = {}, field) {
@@ -206,11 +188,11 @@ function sellingPoints(task = {}) {
     .slice(0, 5);
 }
 
-function imageColumns(task, skuTask, platformId, includeMockImages, isAmazon) {
+function imageColumns(task, skuTask, platformId, options, isAmazon, imagePaths, target) {
   const order = isAmazon
     ? ['main_image', 'feature_image', 'size_image', 'compatibility_image', 'package_image', 'lifestyle_image']
     : ['main_image', 'feature_image', 'size_image', 'compatibility_image', 'package_image', 'lifestyle_image'];
-  const paths = order.map((type) => imagePath(task, skuTask, platformId, type, includeMockImages));
+  const paths = order.map((type) => imagePath(task, skuTask, platformId, type, options, imagePaths, target));
   if (isAmazon) {
     return {
       main_image: paths[0] || '',
@@ -231,14 +213,15 @@ function imageColumns(task, skuTask, platformId, includeMockImages, isAmazon) {
   };
 }
 
-export function buildPlatformListingRows({ platformId, batch = {}, taskById = new Map(), includeMockImages = true } = {}) {
-  const fieldsBySku = {};
+export function buildPlatformListingRows({ platformId, batch = {}, taskById = new Map(), includeMockImages = true, includeRealSamples = false, imagePaths } = {}) {
+  const fieldsBySku = Object.create(null);
   const rows = [];
   const missingRequiredFields = [];
   const blockedFields = [];
   const noReviewSku = [];
+  const targetRows = [];
   const isAmazon = platformId === 'amazon';
-  const columns = PLATFORM_COLUMNS[platformId];
+  let columns = Object.hasOwn(PLATFORM_COLUMNS,platformId) ? PLATFORM_COLUMNS[platformId] : null;
   if (!columns) {
     return {
       columns: ['platform', 'placeholder_status', 'note'],
@@ -249,9 +232,12 @@ export function buildPlatformListingRows({ platformId, batch = {}, taskById = ne
       noReviewSku
     };
   }
+  const multiTarget = asArray(batch.skuTasks).some(sku => taskById.has(sku.taskId) && exportTargetsForPlatform(taskById.get(sku.taskId), platformId).length > 1);
+  if (multiTarget) columns = [...columns, 'target_id', 'site', 'language'];
   for (const skuTask of asArray(batch.skuTasks)) {
     const task = taskById.get(skuTask.taskId);
     if (!task) continue;
+    for (const target of exportTargetsForPlatform(task, platformId)) {
     const sku = skuValue(task, skuTask);
     const mapping = {};
     const riskNotes = [];
@@ -273,7 +259,7 @@ export function buildPlatformListingRows({ platformId, batch = {}, taskById = ne
           bullet_point_4: points[3] || '',
           bullet_point_5: points[4] || '',
           product_description: fieldValue({ task, field: 'product_description', mapping, riskNotes }),
-          ...imageColumns(task, skuTask, platformId, includeMockImages, true),
+          ...imageColumns(task, skuTask, platformId, { includeMockImages, includeRealSamples }, true, imagePaths, target),
           variation_theme: '',
           color_name: fieldValue({ task, field: 'color_name', mapping, riskNotes }),
           size_name: fieldValue({ task, field: 'size_name', mapping, riskNotes }),
@@ -295,7 +281,7 @@ export function buildPlatformListingRows({ platformId, batch = {}, taskById = ne
           selling_point_3: points[2] || '',
           selling_point_4: points[3] || '',
           selling_point_5: points[4] || '',
-          ...imageColumns(task, skuTask, platformId, includeMockImages, false),
+          ...imageColumns(task, skuTask, platformId, { includeMockImages, includeRealSamples }, false, imagePaths, target),
           variation_name: '',
           color: fieldValue({ task, field: 'color', mapping, riskNotes }),
           capacity: fieldValue({ task, field: 'capacity', mapping, riskNotes }),
@@ -307,18 +293,21 @@ export function buildPlatformListingRows({ platformId, batch = {}, taskById = ne
         };
     for (const required of ['product_title', 'product_name', 'main_image']) {
       if (required in base && !base[required]) {
-        missingRequiredFields.push({ sku, platform: platformId, field: required });
+        missingRequiredFields.push({ sku, platform: platformId, targetId: target.id, field: required });
         riskNotes.push(`${required}:missing`);
       }
     }
     base.risk_notes = riskNotes.join('; ');
+    if (multiTarget) Object.assign(base, { target_id: target.id, site: target.site, language: target.language });
+    targetRows.push({ sku, taskId: task.id, targetId: target.id, site: target.site, language: target.language, fields: mapping });
     for (const [field, meta] of Object.entries(mapping)) {
       if (String(meta.status).startsWith('blocked')) blockedFields.push({ sku, platform: platformId, field: FIELD_ALIASES[field] || field, status: meta.status });
     }
     fieldsBySku[sku] = mapping;
     rows.push(sanitizeValue(base));
+    }
   }
-  return { columns, rows, fieldsBySku, missingRequiredFields, blockedFields, noReviewSku };
+  return { columns, rows, fieldsBySku, missingRequiredFields, blockedFields, noReviewSku, targetRows };
 }
 
 export function rowsToCsv(rows = [], columns = []) {

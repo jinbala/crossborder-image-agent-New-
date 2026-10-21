@@ -1,9 +1,12 @@
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
+import { grantAsset } from './ownershipService.js';
 import archiver from 'archiver';
+import sharp from 'sharp';
+import { createHash } from 'node:crypto';
 import { getBatchTask, getTask, paths } from './db.js';
-import { normalizeTargets } from './targetService.js';
+import { exportTargetsForPlatform, resolveExportImageTarget, exportImageKey, structuredTargetFolder, latestImagesForExportTarget, exportImageExclusion } from '../../../frontend/src/utils/exportTargets.js';
 import { buildBatchReviewReport } from './batchReviewReportService.js';
 import { buildReviewReport } from './reviewReportService.js';
 import { analyzeTemplateSet } from './templateAuditService.js';
@@ -73,41 +76,8 @@ async function tasksForBatch(batch = {}) {
   return tasks;
 }
 
-function targetPlatformId(target = {}) {
-  return String(target.platformId || target.platform || '').toLowerCase();
-}
-
-function targetsForTask(task = {}) {
-  return normalizeTargets(task.targets || [], {
-    productInfo: task.productInfoConfirmed || task.productInfo || {},
-    fallbackTask: task
-  });
-}
-
 function imageTypeOf(image = {}) {
   return image.imageType || image.type || image.mockPreview?.type || image.mockPreview?.template?.templateType || '';
-}
-
-function imagePlatformId(image = {}, task = {}) {
-  if (image.platformId || image.platform) return String(image.platformId || image.platform).toLowerCase();
-  const plan = asArray(task.imagePlans).find((item) => item.id === image.planId);
-  if (plan?.platformId || plan?.platform) return String(plan.platformId || plan.platform).toLowerCase();
-  if (plan?.targetId) {
-    const target = targetsForTask(task).find((item) => item.id === plan.targetId || item.targetId === plan.targetId);
-    if (target) return targetPlatformId(target);
-  }
-  const target = targetsForTask(task)[0];
-  return targetPlatformId(target) || String(task.platformId || task.platform || 'amazon').toLowerCase();
-}
-
-function latestImages(task = {}) {
-  const byKey = new Map();
-  for (const image of asArray(task.generatedImages)) {
-    if (image.status && !['succeeded', 'success', 'completed'].includes(image.status)) continue;
-    const key = `${imagePlatformId(image, task)}:${imageTypeOf(image)}`;
-    byKey.set(key, image);
-  }
-  return byKey;
 }
 
 function templateForImage(task = {}, image = {}) {
@@ -154,31 +124,32 @@ function recognitionQualitySummary(task = {}) {
   });
 }
 
-function buildImageRows({ task, skuTask, platformId, baseFolder, options = {} }) {
-  const images = latestImages(task);
+function buildImageRows({ task, skuTask, target, baseFolder, options = {} }) {
+  const platformId = target.platformId, images = latestImagesForExportTarget(task, target);
   return IMAGE_TYPE_ORDER.map(([imageType, fileName]) => {
-    const image = images.get(`${platformId}:${imageType}`);
+    const image = images.get(imageType);
     const sourceType = sourceTypeForImage(image || {});
-    const included = Boolean(image) &&
-      (sourceType !== 'mock' || options.includeMockImages) &&
-      (sourceType !== 'realSample' || options.includeRealSamples);
+    const exclusionCode = image ? exportImageExclusion(image, options) : null;
+    const included = Boolean(image) && !exclusionCode;
     const template = image ? templateForImage(task, image) : {};
     const warnings = image
       ? [
           ...asArray(image.warnings),
-          ...(!included && sourceType === 'mock' ? ['当前导出选项未包含 mock 图片，manifest 已标记 missing。'] : []),
-          ...(!included && sourceType === 'realSample' ? ['当前导出选项未包含真实小样本，manifest 已标记 missing。'] : [])
+          ...(exclusionCode === 'IMAGE_EXCLUDED_MOCK' ? ['当前导出选项未包含 mock 或回退 mock 图片，manifest 已标记 missing。'] : []),
+          ...(exclusionCode === 'IMAGE_EXCLUDED_REAL_SAMPLE' ? ['当前导出选项未包含真实小样本，manifest 已标记 missing。'] : [])
         ]
       : ['图片缺失，manifest 已标记 missing。'];
     return sanitizeValue({
       sku: skuValue(task, skuTask),
       taskId: task.id || skuTask.taskId || '',
       platformId,
+      targetId: target.id, site: target.site, language: target.language,
       imageType,
       fileName,
       sourceFilePath: image?.filePath || '',
       exists: Boolean(image && included),
       sourceType: image ? sourceType : 'missing',
+      ...(exclusionCode ? { exclusionCode } : {}),
       reviewStatus: reviewStatusForTask(task),
       templateName: template.templateName || image?.templateName || '',
       layoutStyle: template.layoutStyle || image?.layoutStyle || '',
@@ -206,13 +177,14 @@ function failedSkuFrom(batch = {}, taskById = new Map()) {
     }));
 }
 
-function buildSkuManifest({ task, skuTask, platformId, imageRows }) {
+function buildSkuManifest({ task, skuTask, target, imageRows }) {
   return sanitizeValue({
     sku: skuValue(task, skuTask),
     taskId: task.id || skuTask.taskId || '',
     productName: task.productInfoConfirmed?.name || task.productInfo?.name || skuTask.displayName || '',
-    platformId,
-    categoryId: task.categoryId || targetsForTask(task).find((target) => targetPlatformId(target) === platformId)?.categoryId || 'generic_ecommerce',
+    platformId: target.platformId, targetId: target.id, site: target.site, language: target.language,
+    placeholderTarget: Boolean(target.placeholder), reviewScope: 'task',
+    categoryId: target.categoryId || task.categoryId || 'generic_ecommerce',
     images: imageRows.map(({ sourceFilePath, zipPath, ...image }) => image),
     productInfoConfirmed: safeProductInfo(task),
     recognitionQualitySummary: recognitionQualitySummary(task),
@@ -330,18 +302,40 @@ function summarize({ batch, platforms, skuPackages, failedSku, includeReports })
     realImageCount,
     fallbackMockImageCount,
     realSampleImageCount,
+    imageErrorCount: imageRows.filter(image => image.errorCode).length,
     reportCount: includeReports ? REPORT_FILES.length + listingFileNamesForPlatforms(platforms).length : 0
   };
+}
+
+function packageWarnings(summary, failedSku) {
+  const warnings = [];
+  if (summary.missingImageCount > 0) warnings.push('部分图片缺失，导出不会中断，已在 manifest 中标记 missing。');
+  if (summary.imageErrorCount > 0) warnings.push('部分源图读取或解码失败，请核对图片清单中的 errorCode 后修复源图并重新导出。');
+  if (summary.mockImageCount > 0) warnings.push('mock 图片会在 manifest 中明确标记 sourceType=mock。');
+  if (failedSku.length > 0) warnings.push('部分 SKU 已写入 failed-sku-report，请人工复查后再上架。');
+  return warnings;
 }
 
 function safetySummary() {
   return {
     noPlatformUpload: true,
     noProviderCall: true,
-    noDatabaseWrite: true,
+    noDatabaseWrite: false,
+    noTaskMutation: true,
+    createsAssetGrants: true,
     sanitized: true,
     mockImagesMarked: true
   };
+}
+
+function checkedPackageFolder(platformId, sku, targetFolder = '') {
+  const platform = platformFolder(platformId);
+  for (const segment of [platform, sku, ...(targetFolder ? [targetFolder] : [])]) {
+    if (typeof segment !== 'string' || segment.length > 200 || !segment || /^\.+$/.test(segment) || /[. ]$/.test(segment) || /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(segment) || /[\\/]/.test(segment)) {
+      throw Object.assign(new Error('导出目录名不适用于 Windows：请调整 SKU 或平台名，避免点号目录、末尾点号、保留设备名或过长名称，再重新预览。'), { statusCode: 400, code: 'EXPORT_PATH_INVALID' });
+    }
+  }
+  return [platform, sku, targetFolder].filter(Boolean).join('/');
 }
 
 async function packageModel(batchId, options = {}) {
@@ -351,26 +345,45 @@ async function packageModel(batchId, options = {}) {
   const taskById = new Map(tasks.map((task) => [task.id, task]));
   const failedSku = failedSkuFrom(batch, taskById);
   const skuPackages = [];
+  const usedFolders = new Set();
+  const targetWarnings = [];
 
   for (const skuTask of asArray(batch.skuTasks)) {
     const task = taskById.get(skuTask.taskId);
     if (!task) continue;
     const sku = safeSegment(skuValue(task, skuTask), 'SKU');
+    for (const image of asArray(task.generatedImages)) {
+      if (image.status && !['succeeded','success','completed'].includes(image.status)) continue;
+      const resolution = resolveExportImageTarget(task, image);
+      if (!resolution.target) targetWarnings.push({ taskId: task.id, imageId: image.id || '', imageType: imageTypeOf(image), code: resolution.code });
+    }
     for (const platformId of normalized.platforms) {
-      const folder = `${platformFolder(platformId)}/${sku}`;
-      const imageRows = buildImageRows({ task, skuTask, platformId, baseFolder: folder, options: normalized });
-      skuPackages.push({
-        sku,
-        skuTask: sanitizeValue(skuTask),
-        task,
-        platformId,
-        folder,
-        imageRows,
-        manifest: buildSkuManifest({ task, skuTask, platformId, imageRows })
-      });
+      const targets = exportTargetsForPlatform(task, platformId);
+      for (const target of targets) {
+        const folder = checkedPackageFolder(platformId, sku, structuredTargetFolder(target, targets));
+        const folderKey = folder.toLowerCase();
+        if (usedFolders.has(folderKey)) throw Object.assign(new Error('导出目录存在重名：请调整重复 SKU、平台名称或目标 ID 后重新预览；未覆盖任何已有图片。'), { statusCode: 409, code: 'EXPORT_PATH_COLLISION' });
+        usedFolders.add(folderKey);
+        const imageRows = buildImageRows({ task, skuTask, target, baseFolder: folder, options: normalized });
+        skuPackages.push({ sku, skuTask: sanitizeValue(skuTask), task, platformId, target, folder, imageRows,
+          manifest: buildSkuManifest({ task, skuTask, target, imageRows }) });
+      }
     }
   }
 
+  let sourceFilesChecked = 0;
+  for (const image of skuPackages.flatMap(pkg => pkg.imageRows)) {
+    if (!image.exists) continue;
+    sourceFilesChecked++;
+    try {
+      const { bytes, input, meta } = await readExportSource(image.sourceFilePath);
+      await input.stats(); // Full decode, including truncated-image checks; no output file.
+      Object.assign(image, { sourceSha256: sha256(bytes), sourceFormat: meta.format, sourceBytes: bytes.length });
+    } catch (error) {
+      image.exists = false; image.errorCode = error.exportImageCode || 'IMAGE_DECODE_FAILED';
+      image.warnings.push('源图预检失败，请按 errorCode 修复文件后重新预览。');
+    }
+  }
   const summary = summarize({
     batch,
     platforms: normalized.platforms,
@@ -378,10 +391,8 @@ async function packageModel(batchId, options = {}) {
     failedSku,
     includeReports: normalized.includeReports
   });
-  const warnings = [];
-  if (summary.missingImageCount > 0) warnings.push('部分图片缺失，导出不会中断，已在 manifest 中标记 missing。');
-  if (summary.mockImageCount > 0) warnings.push('mock 图片会在 manifest 中明确标记 sourceType=mock。');
-  if (failedSku.length > 0) warnings.push('部分 SKU 已写入 failed-sku-report，请人工复查后再上架。');
+  const warnings = packageWarnings(summary, failedSku);
+  if (targetWarnings.length) warnings.push('部分图片目标归属不明确，未借用到其他站点或语言；请核对 targetWarnings 后补齐归属。');
 
   return {
     batch,
@@ -390,6 +401,8 @@ async function packageModel(batchId, options = {}) {
     skuPackages,
     failedSku,
     summary,
+    targetWarnings,
+    preflight: { checkedAt: nowIso(), sourceFilesChecked, noSourceWrite: true },
     warnings,
     reports: normalized.includeReports
       ? buildReports({
@@ -398,8 +411,9 @@ async function packageModel(batchId, options = {}) {
           failedSku,
           listingArtifacts: await buildListingArtifacts(batch.id, {
             platforms: normalized.platforms,
-            includeMockImages: normalized.includeMockImages
-          })
+            includeMockImages: normalized.includeMockImages,
+            includeRealSamples: normalized.includeRealSamples
+          }, { snapshot: { batch, tasks } })
         })
       : {}
   };
@@ -413,7 +427,9 @@ export async function buildExportPackagePreview(batchId, options = {}) {
       directoryTree.push({
         path: image.zipPath,
         status: image.exists ? 'ready' : 'missing',
-        sourceType: image.sourceType
+        sourceType: image.sourceType,
+        targetId: image.targetId, site: image.site, language: image.language,
+        ...(image.errorCode ? { errorCode: image.errorCode } : {}), ...(image.exclusionCode ? { exclusionCode: image.exclusionCode } : {})
       });
     }
     directoryTree.push({ path: `${pkg.folder}/manifest.json`, status: 'ready', sourceType: 'manifest' });
@@ -428,6 +444,8 @@ export async function buildExportPackagePreview(batchId, options = {}) {
     platforms: model.options.platforms,
     summary: model.summary,
     warnings: model.warnings,
+    preflight: model.preflight,
+    targetWarnings: model.targetWarnings,
     reports: model.options.includeReports ? REPORT_FILES : [],
     directoryTree,
     failedSku: model.failedSku
@@ -457,15 +475,68 @@ async function writeJson(filePath, value) {
   await fs.writeFile(filePath, `${JSON.stringify(sanitizeValue(value), null, 2)}\n`, 'utf8');
 }
 
+const imageProblem = code => Object.assign(new Error(code), { exportImageCode: code });
+const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
+export async function readExportSource(relativePath) {
+  const source = safeSourcePath(relativePath);
+  if (!source) throw imageProblem('SOURCE_PATH_REJECTED');
+  let canonical, stat, bytes;
+  try {
+    canonical = await fs.realpath(source);
+    const root = await fs.realpath(paths.rootDir), relative = path.relative(root, canonical);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw imageProblem('SOURCE_PATH_REJECTED');
+    stat = await fs.stat(canonical);
+    if (!stat.isFile()) throw imageProblem('SOURCE_FILE_NOT_REGULAR');
+    if (stat.size > 50 * 1024 * 1024) throw imageProblem('SOURCE_FILE_TOO_LARGE');
+    bytes = await fs.readFile(canonical);
+    if (bytes.length > 50 * 1024 * 1024) throw imageProblem('SOURCE_FILE_TOO_LARGE');
+  } catch (error) { throw error.exportImageCode ? error : imageProblem(error.code === 'ENOENT' ? 'SOURCE_FILE_MISSING' : 'SOURCE_READ_FAILED'); }
+  try {
+    const input = sharp(bytes, { limitInputPixels: 40_000_000, failOn: 'warning' });
+    const meta = await input.metadata();
+    if ((meta.pages || 1) > 1) throw imageProblem('IMAGE_MULTIPAGE_UNSUPPORTED');
+    if (!['jpeg', 'png', 'webp', 'avif', 'heif', 'tiff'].includes(meta.format)) throw imageProblem('IMAGE_FORMAT_UNSUPPORTED');
+    return { bytes, input, meta, sourcePath: canonical };
+  } catch (error) { throw error.exportImageCode ? error : imageProblem('IMAGE_DECODE_FAILED'); }
+}
+
+async function writeExportJpeg(relativePath, destination) {
+  const { bytes, input } = await readExportSource(relativePath);
+  let output, info;
+  try { ({ data: output, info } = await input.rotate().flatten({ background: '#ffffff' }).toColourspace('srgb').jpeg({ quality: 95 }).toBuffer({ resolveWithObject: true })); }
+  catch { throw imageProblem('IMAGE_DECODE_FAILED'); }
+  let handle;
+  try { handle = await fs.open(destination, 'wx'); await handle.writeFile(output); await handle.close(); handle = null; }
+  catch {
+    if (handle) {
+      await handle.close().catch(() => {});
+      try { await fs.unlink(destination); }
+      catch { throw Object.assign(new Error('导出写入失败且未完成文件无法清理，请检查磁盘和权限后重试。'), { fatalExport: true }); }
+    }
+    throw imageProblem('OUTPUT_WRITE_FAILED');
+  }
+  return { sourceSha256: sha256(bytes), sha256: sha256(output), bytes: output.length, format: 'jpeg', width: info.width, height: info.height };
+}
+
+async function hashFile(file) {
+  const hash = createHash('sha256'); let bytes = 0;
+  for await (const chunk of fsSync.createReadStream(file)) { hash.update(chunk); bytes += chunk.length; }
+  return { sha256: hash.digest('hex'), bytes };
+}
+
 async function zipDirectory(sourceDir, zipPath, packageId) {
   await new Promise((resolve, reject) => {
     const output = fsSync.createWriteStream(zipPath);
     const archive = archiver('zip', { zlib: { level: 9 } });
+    let failed = false;
+    const fail = error => { if (failed) return; failed = true; archive.abort(); output.destroy(); reject(error); };
     output.on('close', resolve);
-    archive.on('error', reject);
+    output.on('error', fail);
+    archive.on('error', fail);
+    archive.on('warning', fail);
     archive.pipe(output);
     archive.directory(sourceDir, packageId);
-    archive.finalize();
+    archive.finalize().catch(fail);
   });
 }
 
@@ -479,6 +550,8 @@ export async function createStructuredExportPackage(batchId, options = {}) {
   const packageId = safeSegment(`export-package-${batchId}-${timestampSafe()}`, 'export-package');
   const packageRoot = safeOutputPath('export-packages', packageId);
   const zipPath = safeOutputPath('export-packages', `${packageId}.zip`);
+  grantAsset(packageRoot, 'batch', batchId);
+  grantAsset(zipPath, 'batch', batchId);
   await fs.mkdir(path.dirname(packageRoot), { recursive: true });
   await fs.mkdir(packageRoot, { recursive: false });
 
@@ -487,23 +560,29 @@ export async function createStructuredExportPackage(batchId, options = {}) {
     await fs.mkdir(folderPath, { recursive: true });
     for (const image of pkg.imageRows) {
       if (!image.exists) continue;
-      const sourcePath = safeSourcePath(image.sourceFilePath);
-      if (!sourcePath) {
-        image.exists = false;
-        image.warnings = [...asArray(image.warnings), '图片路径未通过安全校验，已跳过复制。'];
-        continue;
-      }
       try {
-        await fs.copyFile(sourcePath, path.join(folderPath, image.fileName));
-      } catch {
+        Object.assign(image, await writeExportJpeg(image.sourceFilePath, path.join(folderPath, image.fileName)));
+      } catch (error) {
+        if (error.fatalExport) throw error;
         image.exists = false;
-        image.warnings = [...asArray(image.warnings), '图片文件读取失败，已在 manifest 中标记 missing。'];
+        image.errorCode = error.exportImageCode || 'OUTPUT_WRITE_FAILED';
+        image.warnings = [...asArray(image.warnings), '图片导出失败，已在 manifest 中标记 missing；请按 errorCode 检查源图后重新导出。'];
       }
     }
     await writeJson(path.join(folderPath, 'manifest.json'), {
       ...pkg.manifest,
       images: pkg.imageRows.map(({ sourceFilePath, zipPath: _zipPath, ...image }) => image)
     });
+  }
+
+  // File I/O is authoritative: do not return the earlier optimistic preview.
+  model.summary = summarize({ batch: model.batch, platforms: model.options.platforms, skuPackages: model.skuPackages, failedSku: model.failedSku, includeReports: model.options.includeReports });
+  model.warnings = packageWarnings(model.summary, model.failedSku);
+  if (model.targetWarnings.length) model.warnings.push('部分图片目标归属不明确，未借用到其他站点或语言；请核对 targetWarnings 后补齐归属。');
+  if (model.options.includeReports) {
+    const imagePaths = new Map(model.skuPackages.flatMap(pkg => pkg.imageRows.map(image => [exportImageKey(image.taskId, image.targetId, image.imageType), image.exists ? image.zipPath : ''])));
+    model.reports = buildReports({ batch: model.batch, tasks: model.tasks, failedSku: model.failedSku,
+      listingArtifacts: await buildListingArtifacts(model.batch.id, { platforms: model.options.platforms, includeMockImages: model.options.includeMockImages, includeRealSamples: model.options.includeRealSamples }, { imagePaths, snapshot: { batch: model.batch, tasks: model.tasks } }) });
   }
 
   if (model.options.includeReports) {
@@ -523,7 +602,7 @@ export async function createStructuredExportPackage(batchId, options = {}) {
   const fileList = [];
   for (const pkg of model.skuPackages) {
     for (const image of pkg.imageRows) {
-      fileList.push({ path: image.zipPath, exists: image.exists, sourceType: image.sourceType, imageType: image.imageType });
+      fileList.push({ path: image.zipPath, exists: image.exists, sourceType: image.sourceType, imageType: image.imageType, targetId:image.targetId,site:image.site,language:image.language, ...(image.sha256 ? { sha256: image.sha256, bytes: image.bytes } : {}), ...(image.errorCode ? { errorCode: image.errorCode } : {}), ...(image.exclusionCode ? { exclusionCode:image.exclusionCode } : {}) });
     }
     fileList.push({ path: `${pkg.folder}/manifest.json`, exists: true, sourceType: 'manifest' });
   }
@@ -538,6 +617,8 @@ export async function createStructuredExportPackage(batchId, options = {}) {
     batchId,
     generatedAt: nowIso(),
     platforms: model.options.platforms,
+    targets: model.skuPackages.map(pkg => ({ taskId: pkg.task.id, sku: pkg.manifest.sku, targetId: pkg.target.id, platformId: pkg.platformId, site: pkg.target.site, language: pkg.target.language, folder: pkg.folder, placeholder: Boolean(pkg.target.placeholder) })),
+    targetWarnings: model.targetWarnings,
     totalSku: model.summary.totalSku,
     successSku: model.summary.successSku,
     failedSku: model.summary.failedSku,
@@ -546,6 +627,9 @@ export async function createStructuredExportPackage(batchId, options = {}) {
     realImageCount: model.summary.realImageCount,
     fallbackMockImageCount: model.summary.fallbackMockImageCount,
     realSampleImageCount: model.summary.realSampleImageCount,
+    readyImageCount: model.summary.readyImageCount,
+    totalExpectedImages: model.summary.totalExpectedImages,
+    imageErrorCount: model.summary.imageErrorCount,
     reviewSummary: reviewReport.summary || null,
     costSummary: model.reports['cost-report.json'] || null,
     safetySummary: safetySummary(),
@@ -560,7 +644,10 @@ export async function createStructuredExportPackage(batchId, options = {}) {
     batchId,
     zipFile: `${packageId}.zip`,
     relativePath,
+    ...(await hashFile(zipPath)),
     summary: model.summary,
+    directoryTree: fileList.map(file => ({ path: file.path, status: file.exists ? 'ready' : 'missing', sourceType: file.sourceType, targetId:file.targetId,site:file.site,language:file.language, ...(file.errorCode ? { errorCode: file.errorCode } : {}), ...(file.exclusionCode ? { exclusionCode:file.exclusionCode } : {}) })),
+    preflight:model.preflight,targetWarnings:model.targetWarnings,
     warnings: model.warnings,
     failedSku: model.failedSku
   });

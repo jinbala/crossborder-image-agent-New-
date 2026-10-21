@@ -1,3 +1,4 @@
+import { useLocale } from '../i18n/LocaleProvider.jsx';
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, CheckCircle2, ClipboardCopy, RefreshCw, XCircle } from 'lucide-react';
 import Section from '../components/Section.jsx';
@@ -44,6 +45,7 @@ function groupChecks(checks = []) {
 }
 
 export default function HealthPage() {
+  const { t, dateTime } = useLocale();
   const [health, setHealth] = useState(null);
   const [markdown, setMarkdown] = useState('');
   const [loading, setLoading] = useState(true);
@@ -74,9 +76,9 @@ export default function HealthPage() {
   async function copyReport() {
     try {
       await navigator.clipboard.writeText(markdown);
-      setMessage('诊断报告已复制，可直接发给 ChatGPT / Codex 排查问题。');
+      setMessage(t("诊断报告已复制，可直接发给 ChatGPT / Codex 排查问题。"));
     } catch {
-      setError('复制失败，请手动选择页面中的诊断报告内容。');
+      setError(t("复制失败，请手动选择页面中的诊断报告内容。"));
     }
   }
 
@@ -86,8 +88,8 @@ export default function HealthPage() {
     <div className="space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-ink">系统健康检查</h1>
-          <p className="mt-1 text-sm text-slate-500">集中检查后端、Provider、目录权限、数据库、快照、批量队列和安全配置。不会显示真实密钥，也不会调用真实 AI。</p>
+          <h1 className="text-2xl font-semibold text-ink">{t("系统健康检查")}</h1>
+          <p className="mt-1 text-sm text-slate-500">{t("集中检查后端、Provider、目录权限、数据库、快照、批量队列和安全配置。不会显示真实密钥，也不会调用真实 AI。")}</p>
         </div>
         <div className="flex gap-2">
           <button
@@ -96,9 +98,7 @@ export default function HealthPage() {
             disabled={!markdown}
             className="focus-ring inline-flex items-center gap-2 rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-60"
           >
-            <ClipboardCopy size={16} />
-            复制诊断报告
-          </button>
+            <ClipboardCopy size={16} />{t("复制诊断报告")}</button>
           <button
             type="button"
             onClick={load}
@@ -106,7 +106,7 @@ export default function HealthPage() {
             className="focus-ring inline-flex items-center gap-2 rounded bg-mint px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
           >
             <RefreshCw size={16} />
-            {loading ? '检查中...' : '重新检查'}
+            {loading ? t("检查中...") : t("重新检查")}
           </button>
         </div>
       </div>
@@ -118,25 +118,23 @@ export default function HealthPage() {
         <div className={`rounded border px-4 py-3 ${statusStyles[overall]}`}>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-lg font-semibold">
-              <StatusIcon status={overall} />
-              总体状态：{statusLabels[overall]}
+              <StatusIcon status={overall} />{t("总体状态：")}{t(statusLabels[overall] || overall)}
             </div>
-            <div className="text-sm">
-              正常 {health.summary?.healthyCount || 0} / 警告 {health.summary?.warningCount || 0} / 错误 {health.summary?.errorCount || 0}
+            <div className="text-sm">{t('正常 {healthy} / 警告 {warnings} / 错误 {errors}', { healthy: health.summary?.healthyCount || 0, warnings: health.summary?.warningCount || 0, errors: health.summary?.errorCount || 0 })}
             </div>
           </div>
-          <div className="mt-1 text-xs opacity-80">检查时间：{new Date(health.checkedAt).toLocaleString()}</div>
+          <div className="mt-1 text-xs opacity-80">{t("检查时间：")}{dateTime(health.checkedAt)}</div>
         </div>
       )}
 
       {loading && !health ? (
-        <div className="text-sm text-slate-500">正在运行完整健康检查...</div>
+        <div className="text-sm text-slate-500">{t("正在运行完整健康检查...")}</div>
       ) : (
         Object.entries(categoryLabels).map(([category, label]) => {
           const checks = groupedChecks[category] || [];
           if (!checks.length) return null;
           return (
-            <Section key={category} title={label}>
+            <Section key={category} title={t(label)}>
               <div className="space-y-3">
                 {checks.map((check) => (
                   <div key={check.id} className={`rounded border p-3 ${statusStyles[check.status] || statusStyles.warning}`}>
@@ -144,20 +142,19 @@ export default function HealthPage() {
                       <div>
                         <div className="flex items-center gap-2 font-semibold">
                           <StatusIcon status={check.status} />
-                          {check.title}
+                          {t(check.title)}
                         </div>
                         <p className="mt-1 text-sm">{check.message}</p>
                         {check.fixSuggestion && (
-                          <p className="mt-2 rounded bg-white/60 px-3 py-2 text-sm">
-                            修复建议：{check.fixSuggestion}
+                          <p className="mt-2 rounded bg-white/60 px-3 py-2 text-sm">{t("修复建议：")}{check.fixSuggestion}
                           </p>
                         )}
                       </div>
-                      <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold">{statusLabels[check.status] || check.status}</span>
+                      <span className="rounded bg-white/70 px-2 py-1 text-xs font-semibold">{t(statusLabels[check.status] || check.status)}</span>
                     </div>
                     {check.details && Object.keys(check.details).length > 0 && (
                       <details className="mt-2">
-                        <summary className="cursor-pointer text-xs font-semibold">查看脱敏详情</summary>
+                        <summary className="cursor-pointer text-xs font-semibold">{t("查看脱敏详情")}</summary>
                         <pre className="mt-2 max-h-56 overflow-auto rounded bg-white/80 p-3 text-xs text-slate-700">{JSON.stringify(check.details, null, 2)}</pre>
                       </details>
                     )}
@@ -170,7 +167,8 @@ export default function HealthPage() {
       )}
 
       {markdown && (
-        <Section title="诊断报告预览">
+        <Section title={t("诊断报告预览")}>
+          <p className="mb-2 text-xs text-slate-500">{t('原始报告、详细消息、JSON 和路径保留原文，不随界面语言改写。')}</p>
           <pre className="max-h-96 overflow-auto rounded bg-slate-950 p-4 text-xs text-slate-100">{markdown}</pre>
         </Section>
       )}

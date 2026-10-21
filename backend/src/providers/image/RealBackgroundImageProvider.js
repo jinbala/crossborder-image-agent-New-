@@ -76,11 +76,12 @@ export class RealBackgroundImageProvider {
     const generationRequest = buildGenerationRequest({ task, plan });
     const summary = generationRequestSummary(generationRequest);
 
-    if (mode !== 'real_background') {
+    const realTestMode = ['real', 'real-test', 'real_test'].includes(mode);
+    if (mode !== 'real_background' && !realTestMode) {
       return this.mockProvider.generate({ task, plan, outputIndex, version, regenerate });
     }
 
-      if (!canUseRealBackground(plan, generationRequest, mode)) {
+    if (!canUseRealBackground(plan, generationRequest, realTestMode ? 'real-test' : mode)) {
       const mock = await this.mockProvider.generate({ task, plan, outputIndex, version, regenerate });
       return decorateMock(mock, {
         mode: 'mock',

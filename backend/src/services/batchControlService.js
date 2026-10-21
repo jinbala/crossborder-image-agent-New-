@@ -62,7 +62,7 @@ export async function deleteBatch(batchId, options = {}) {
   const current = await getBatchTask(batchId);
   if (!current) throw notFound();
   if (current.queue?.status === 'running' || current.locks?.isRunning) {
-    await cancelBatchQueue(batchId);
+    await cancelBatchQueue(batchId, { waitForCompletion: true });
   }
   const deleted = await deleteBatchTaskRecord(batchId, {
     deleteTasks: options.deleteTasks !== false,

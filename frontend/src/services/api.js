@@ -13,11 +13,12 @@ import { normalizeUploadReadinessOptions } from '../utils/uploadReadiness.js';
 
 const API_BASE = import.meta.env?.VITE_API_BASE_URL || '/api';
 export const ASSET_BASE = import.meta.env?.VITE_ASSET_BASE_URL || '';
+let sessionCsrf = null;
+export function setSessionCsrf(value) { sessionCsrf = value || null; }
 
 async function request(path, options = {}) {
-  const headers = options.body instanceof FormData
-    ? options.headers
-    : { 'Content-Type': 'application/json', ...options.headers };
+  const headers = { ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+    ...(sessionCsrf ? { 'X-CSRF-Token': sessionCsrf } : {}), ...options.headers };
 
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
@@ -25,6 +26,7 @@ async function request(path, options = {}) {
   });
 
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new Event('workbench-session-expired'));
     let message = '请求失败';
     try {
       const body = await response.json();
@@ -41,7 +43,7 @@ async function request(path, options = {}) {
       message = `当前步骤暂时不能执行，请先完成前置流程。${message}`;
     }
 
-    throw new Error(message);
+    throw Object.assign(new Error(message), { status: response.status });
   }
 
   return response.json();
@@ -56,6 +58,7 @@ function normalizeBatchQueueOptions(input = {}) {
     : 'recognize';
   const mode = ['mock', 'real', 'real-test'].includes(safeValue.mode) ? safeValue.mode : 'mock';
   const payload = { action, mode };
+  if (safeValue.confirmPaidApi === true) payload.confirmPaidApi = true;
   const concurrency = Number(safeValue.concurrency);
   if (Number.isFinite(concurrency) && concurrency > 0) payload.concurrency = concurrency;
   if (safeValue.filter) payload.filter = String(safeValue.filter);
@@ -63,6 +66,63 @@ function normalizeBatchQueueOptions(input = {}) {
 }
 
 export const api = {
+  getAcceptanceWorkspace: (actorId) => request(`/final-acceptance/workspace?expectedActorId=${encodeURIComponent(actorId)}`),
+  saveAcceptanceWorkspace: (payload) => request('/final-acceptance/workspace', { method: 'POST', body: JSON.stringify(payload) }),
+  validateAcceptanceWorkspace: (document, expectedActorId) => request('/final-acceptance/workspace/validate', { method: 'POST', body: JSON.stringify({ document, expectedActorId }) }),
+  resetAcceptanceWorkspace: (payload) => request('/final-acceptance/workspace/reset', { method: 'POST', body: JSON.stringify(payload) }),
+  getAuthorizationStatus: () => request('/platform/authorizations/status'),
+  listShops: () => request('/platform/shops'),
+  authorizeShop: (payload) => request('/platform/shops/authorize', { method: 'POST', body: JSON.stringify(payload) }),
+  revokeShop: (id) => request(`/platform/shops/${encodeURIComponent(id)}/revoke`, { method: 'POST', body: JSON.stringify({ confirm: true }) }),
+  listErpGrants: () => request('/platform/erp-grants'),
+  createErpGrant: (payload) => request('/platform/erp-grants', { method: 'POST', body: JSON.stringify(payload) }),
+  revokeErpGrant: (id) => request(`/platform/erp-grants/${encodeURIComponent(id)}/revoke`, { method: 'POST', body: JSON.stringify({ confirm: true }) }),
+  planCreativeBrief: (payload) => request('/platform/studio/plan', { method: 'POST', body: JSON.stringify(payload) }),
+  recordHistory: (id) => request(`/platform/record-history/${encodeURIComponent(id)}`),
+  renderStudio: (files, background, options) => {
+    const body = new FormData(); Array.from(files).forEach((file) => body.append('images', file));
+    if (background) body.append('background', background); body.append('options', JSON.stringify(options));
+    return request('/platform/studio/render', { method: 'POST', body });
+  },
+  listDevices: () => request('/platform/devices'),
+  createDeviceCode: () => request('/platform/devices/code', { method: 'POST' }),
+  revokeDevice: (id) => request(`/platform/devices/${encodeURIComponent(id)}/revoke`, { method: 'POST' }),
+  getSession: () => request('/auth/session'),
+  getAgreement: () => request('/auth/agreement'),
+  bootstrapAccount: (payload) => request('/auth/bootstrap', { method: 'POST', body: JSON.stringify(payload) }),
+  login: (payload) => request('/auth/login', { method: 'POST', body: JSON.stringify(payload) }),
+  logout: () => request('/auth/logout', { method: 'POST' }),
+  changePassword: (payload) => request('/auth/password', { method: 'POST', body: JSON.stringify(payload) }),
+  getWorkspace: () => request('/platform/workspace'),
+  getWorkbenchJobDetail: (id, page = 1) => request(`/workbench/jobs/${encodeURIComponent(id)}?page=${page}&pageSize=30`),
+  resumeSkuPack: (id, payload) => request(`/workbench/sku-packs/${encodeURIComponent(id)}/resume`, { method: 'POST', body: JSON.stringify(payload) }),
+  createCommerceSandbox: (sourceId) => request('/platform/commerce-sandbox', { method: 'POST', body: JSON.stringify({ sourceId, mode: 'local-sandbox', confirm: true }) }),
+  getCommerceSandbox: (id) => request(`/platform/commerce-sandbox/${encodeURIComponent(id)}`),
+  runCommerceSandbox: (id, payload) => request(`/platform/commerce-sandbox/${encodeURIComponent(id)}/run`, { method: 'POST', body: JSON.stringify(payload) }),
+  stopCommerceSandbox: (id, action) => request(`/platform/commerce-sandbox/${encodeURIComponent(id)}/stop`, { method: 'POST', body: JSON.stringify({ action, confirm: true }) }),
+  getProductLinks: (id, page = 1) => request(`/platform/products/${encodeURIComponent(id)}/links?page=${page}`),
+  listMembers: () => request('/platform/members'),
+  createMember: (payload) => request('/platform/members', { method: 'POST', body: JSON.stringify(payload) }),
+  updateMember: (id, payload) => request(`/platform/members/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  listAudit: (query = {}) => request(`/platform/audit?${new URLSearchParams(query)}`),
+  listTaskCenter: (query = {}) => request(`/platform/task-center?${new URLSearchParams(query)}`),
+  taskCenterCsvUrl: (query = {}) => `${API_BASE}/platform/task-center/export.csv?${new URLSearchParams(query)}`,
+  taskCenterAction: (id, payload) => request(`/platform/task-center/${encodeURIComponent(id)}/actions`, { method: 'POST', body: JSON.stringify(payload) }),
+  getSupportStatus: () => request('/platform/support/status'),
+  rebuildLegacyIndex: () => request('/platform/task-index/rebuild', { method: 'POST', body: JSON.stringify({ confirm: true }) }),
+  previewResourceOwner: (kind, id, ownerId) => request(`/platform/resources/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/owner-preview`, { method: 'POST', body: JSON.stringify({ ownerId }) }),
+  assignResourceOwner: (kind, id, payload) => request(`/platform/resources/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/owner`, { method: 'POST', body: JSON.stringify(payload) }),
+  listPlatformRecords: (kind, query = {}) => request(`/platform/records/${encodeURIComponent(kind)}?${new URLSearchParams(query)}`),
+  savePlatformRecord: (kind, payload, id) => request(`/platform/records/${encodeURIComponent(kind)}${id ? `/${encodeURIComponent(id)}` : ''}`, { method: id ? 'PATCH' : 'POST', body: JSON.stringify(payload) }),
+  archivePlatformRecord: (id, payload) => request(`/platform/record-actions/${encodeURIComponent(id)}/archive`, { method: 'POST', body: JSON.stringify(payload) }),
+  importPlatformRecords: (kind, payload) => request(`/platform/records/${encodeURIComponent(kind)}/import`, { method: 'POST', body: JSON.stringify(payload) }),
+  platformExportUrl: (kind) => `${API_BASE}/platform/records/${encodeURIComponent(kind)}/export`,
+  importProductsFromTasks: (payload = {}) => request('/platform/products/import-tasks', { method: 'POST', body: JSON.stringify(payload) }),
+  listPersonalSpace: (query = {}) => request(`/platform/space?${new URLSearchParams(query)}`),
+  archiveSpace: (id, restore = false) => request(`/platform/space/${encodeURIComponent(id)}/archive`, { method: 'POST', body: JSON.stringify({ confirm: true, restore }) }),
+  getDesktopRuntime: (query = {}, options = {}) => request(`/desktop/runtime?${new URLSearchParams(query)}`, { signal: options.signal }),
+  pauseAllQueues: () => request('/desktop/pause-all', { method: 'POST' }),
+  createExtensionPairingCode: () => request('/desktop/pairing-code', { method: 'POST' }),
   listTasks: () => request('/tasks'),
   listPlatformRules: () => request('/tasks/platform-rules'),
   listRulePlatforms: () => request('/rules/platforms'),
@@ -89,7 +149,7 @@ export const api = {
     return request('/tasks/upload', { method: 'POST', body: formData });
   },
   uploadImage: (file) => api.uploadImages([file]),
-  recognize: (taskId) => request(`/tasks/${taskId}/recognize`, { method: 'POST' }),
+  recognize: (taskId, approval = {}) => request(`/tasks/${taskId}/recognize`, { method: 'POST', body: JSON.stringify({ confirmPaidApi: approval.confirmPaidApi === true }) }),
   saveProduct: (taskId, productInfo) => request(`/tasks/${taskId}/product`, {
     method: 'PATCH',
     body: JSON.stringify({ productInfo })
@@ -111,9 +171,9 @@ export const api = {
     method: 'POST',
     body: JSON.stringify({ sourceImageId })
   }),
-  previewMatting: (taskId, planId, sourceImageId) => request(`/tasks/${taskId}/plans/${planId}/matting-preview`, {
+  previewMatting: (taskId, planId, sourceImageId, approval = {}) => request(`/tasks/${taskId}/plans/${planId}/matting-preview`, {
     method: 'POST',
-    body: JSON.stringify(sourceImageId ? { sourceImageId } : {})
+    body: JSON.stringify({ ...(sourceImageId ? { sourceImageId } : {}), confirmPaidApi: approval.confirmPaidApi === true })
   }),
   updateTextLayout: (taskId, planId, textLayoutOverride) => request(`/tasks/${taskId}/plans/${planId}/text-layout`, {
     method: 'POST',
@@ -166,7 +226,8 @@ export const api = {
     const normalized = normalizeListingExportOptions(options);
     const params = new URLSearchParams({
       platforms: normalized.platforms.join(','),
-      includeMockImages: String(normalized.includeMockImages)
+      includeMockImages: String(normalized.includeMockImages),
+      includeRealSamples: String(normalized.includeRealSamples)
     });
     return request(`/batches/${batchId}/listing-csv/preview?${params.toString()}`);
   },
@@ -326,6 +387,7 @@ export const api = {
   }),
   getThreeSampleGenerationReport: (taskId) => request(`/generate/${taskId}/three-sample-report`),
   getMattingConfig: () => request('/matting/config'),
+  adoptMatting: (payload) => request('/matting/adopt', { method: 'POST', body: JSON.stringify({ ...payload, confirm: true }) }),
   runMatting: (payload = {}) => request('/matting/run', {
     method: 'POST',
     body: JSON.stringify(normalizeMattingPayload(payload))
@@ -387,7 +449,7 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(normalizeImportScannedFoldersPayload(payload))
   }),
-  batchRecognize: (batchId) => request(`/batches/${batchId}/recognize`, { method: 'POST' }),
+  batchRecognize: (batchId, approval = {}) => request(`/batches/${batchId}/recognize`, { method: 'POST', body: JSON.stringify({ confirmPaidApi: approval.confirmPaidApi === true }) }),
   batchApplyTargets: (batchId, defaultTargets) => request(`/batches/${batchId}/apply-targets`, {
     method: 'POST',
     body: JSON.stringify({ defaultTargets })
@@ -406,12 +468,112 @@ export const api = {
     body: JSON.stringify(normalizeBatchQueueOptions(options))
   }),
   pauseBatchQueue: (batchId) => request(`/batches/${batchId}/queue/pause`, { method: 'POST' }),
-  resumeBatchQueue: (batchId) => request(`/batches/${batchId}/queue/resume`, { method: 'POST' }),
+  resumeBatchQueue: (batchId, approval = {}) => request(`/batches/${batchId}/queue/resume`, { method: 'POST', body: JSON.stringify({ confirmPaidApi: approval.confirmPaidApi === true }) }),
   cancelBatchQueue: (batchId) => request(`/batches/${batchId}/queue/cancel`, { method: 'POST' }),
   retryFailedBatchQueue: (batchId, options = {}) => request(`/batches/${batchId}/queue/retry-failed`, {
     method: 'POST',
     body: JSON.stringify(normalizeBatchQueueOptions(options))
   }),
   getBatchLogs: (batchId) => request(`/batches/${batchId}/logs`),
-  batchExportUrl: (batchId) => `${API_BASE}/batches/${batchId}/export`
+  batchExportUrl: (batchId) => `${API_BASE}/batches/${batchId}/export`,
+  getWorkbenchOverview: () => request('/workbench/overview'),
+  listWorkbenchJobs: () => request('/workbench/jobs'),
+  getCollectionDraft: () => request('/workbench/collection-drafts'),
+  stageCollectionRows: (rows, options, context) => request('/workbench/collection-drafts/rows', {
+    method: 'POST', body: JSON.stringify({ rows, options, expectedActorId: context.actorId, generation: context.generation })
+  }),
+  stageCollectionSheet: (file, options, context) => {
+    const body = new FormData(); body.append('sheet', file); body.append('options', JSON.stringify(options));
+    body.append('expectedActorId', context.actorId); body.append('generation', context.generation);
+    return request('/workbench/collection-drafts/sheet', { method: 'POST', body });
+  },
+  submitCollectionDraft: (id, actorId) => request(`/workbench/collection-drafts/${encodeURIComponent(id)}/submit`, {
+    method: 'POST', body: JSON.stringify({ expectedActorId: actorId })
+  }),
+  acknowledgeCollectionDraft: (id, actorId, jobId) => request(`/workbench/collection-drafts/${encodeURIComponent(id)}/ack`, {
+    method: 'POST', body: JSON.stringify({ expectedActorId: actorId, jobId })
+  }),
+  discardCollectionDraft: (id, actorId) => request(`/workbench/collection-drafts/${encodeURIComponent(id)}/discard`, {
+    method: 'POST', body: JSON.stringify({ expectedActorId: actorId, confirm: true })
+  }),
+  createCollectionPlan: (payload = {}) => request('/workbench/collection-plans', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  }),
+  createCollectionJob: (file, options = {}) => {
+    const formData = new FormData();
+    formData.append('sheet', file);
+    formData.append('options', JSON.stringify(options));
+    return request('/workbench/collection-jobs', { method: 'POST', body: formData });
+  },
+  createCollectionJobFromRows: (rows, options = {}) => request('/workbench/collection-jobs/rows', {
+    method: 'POST',
+    body: JSON.stringify({ rows, options })
+  }),
+  getCollectionJob: (jobId) => request(`/workbench/collection-jobs/${encodeURIComponent(jobId)}`),
+  runCollectionJob: (jobId, options = {}) => request(`/workbench/collection-jobs/${encodeURIComponent(jobId)}/run`, {
+    method: 'POST',
+    body: JSON.stringify(options)
+  }),
+  createListingDryRun: (payload = {}) => request('/workbench/listing-dry-runs', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  }),
+  createPricingPreview: (payload = {}) => request('/workbench/pricing-previews', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  }),
+  listMaterialRecords: (filters = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); });
+    return request(`/workbench/materials${params.size ? `?${params.toString()}` : ''}`);
+  },
+  importMaterialRecords: (records) => request('/workbench/materials/import', {
+    method: 'POST',
+    body: JSON.stringify({ records })
+  }),
+  updateMaterialRecord: (recordId, patch) => request(`/workbench/materials/${encodeURIComponent(recordId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch)
+  }),
+  archiveMaterialRecord: (recordId, restore = false) => request(`/workbench/materials/${encodeURIComponent(recordId)}${restore ? '/restore' : ''}`, {
+    method: restore ? 'POST' : 'DELETE', body: JSON.stringify({ confirm: true })
+  }),
+  materialRecordsExportUrl: (filters = {}) => {
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => { if (value) params.set(key, value); });
+    return `${API_BASE}/workbench/materials/export.csv${params.size ? `?${params.toString()}` : ''}`;
+  },
+  inspectWorkbookTemplate: (file, platformId = 'temu') => {
+    const formData = new FormData();
+    formData.append('template', file);
+    formData.append('platformId', platformId);
+    return request('/workbench/template-inspections', { method: 'POST', body: formData });
+  },
+  previewWorkbookFill: (file, options = {}) => {
+    const formData = new FormData();
+    formData.append('template', file);
+    formData.append('options', JSON.stringify(options));
+    return request('/workbench/template-fills/preview', { method: 'POST', body: formData });
+  },
+  executeWorkbookFill: (fillId, payload) => request(`/workbench/template-fills/${encodeURIComponent(fillId)}/execute`, { method: 'POST', body: JSON.stringify(payload) }),
+  createImagePack: (files, options = {}) => {
+    const formData = new FormData();
+    Array.from(files || []).forEach((file) => formData.append('images', file));
+    Object.entries(options).forEach(([key, value]) => formData.append(key, String(value)));
+    return request('/workbench/image-packs', { method: 'POST', body: formData });
+  },
+  createSkuPack: (files, options = {}) => {
+    const selectedFiles = Array.from(files || []);
+    const formData = new FormData();
+    selectedFiles.forEach((file) => formData.append('images', file));
+    formData.append('relativePaths', JSON.stringify(selectedFiles.map((file) => file.webkitRelativePath || file.name)));
+    formData.append('options', JSON.stringify(options));
+    return request('/workbench/sku-packs', { method: 'POST', body: formData });
+  },
+  importSkuMetadata: (file) => {
+    const formData = new FormData();
+    formData.append('sheet', file);
+    return request('/workbench/sku-metadata-imports', { method: 'POST', body: formData });
+  }
 };

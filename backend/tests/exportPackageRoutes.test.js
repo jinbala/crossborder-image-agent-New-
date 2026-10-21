@@ -3,6 +3,7 @@ import { beforeEach, test } from 'node:test';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import request from 'supertest';
+import sharp from 'sharp';
 import app from '../src/app.js';
 import { createBatchTask, createTask, getBatchTask, resetDatabaseForTests, paths } from '../src/services/db.js';
 
@@ -15,7 +16,7 @@ beforeEach(async () => {
   await fs.rm(fixtureOutputDir, { recursive: true, force: true });
   await fs.rm(exportPackagesDir, { recursive: true, force: true });
   await fs.mkdir(fixtureOutputDir, { recursive: true });
-  await fs.writeFile(path.join(fixtureOutputDir, 'main_image.jpg'), 'route-main');
+  await sharp({ create: { width: 16, height: 12, channels: 3, background: '#406080' } }).jpeg().toFile(path.join(fixtureOutputDir, 'main_image.jpg'));
 });
 
 async function seedRouteBatch() {

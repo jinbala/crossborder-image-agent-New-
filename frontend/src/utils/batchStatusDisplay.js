@@ -1,3 +1,5 @@
+import {exportReportText} from './exportReportLabels.js';
+
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -80,8 +82,8 @@ function isFreshCurrentBatchPendingRecognition(sku = {}) {
   return values.some((value) => firstRunValues.has(value));
 }
 
-function display(status, reason = '') {
-  const label = queueStatusLabels[status] || queueStatusLabels.pending;
+function display(status, reason = '', t) {
+  const label = exportReportText(t, Object.hasOwn(queueStatusLabels,status) ? queueStatusLabels[status] : queueStatusLabels.pending);
   return {
     status,
     label,
@@ -90,56 +92,57 @@ function display(status, reason = '') {
   };
 }
 
-export function getSkuDisplayQueueStatus(sku = {}, batchStabilityReport = null, batchResumePlan = null) {
+export function getSkuDisplayQueueStatus(sku = {}, batchStabilityReport = null, batchResumePlan = null, t) {
+  const localDisplay = (status, reason) => display(status,reason,t);
   if (isFreshCurrentBatchPendingRecognition(sku)) {
-    return display('pending');
+    return localDisplay('pending');
   }
 
   const blockedRow = findBlockedResumeRow(sku, batchResumePlan);
   if (blockedRow) {
-    return display('blocked', blockedRow.blockedReason || blockedRow.reason || blockedRow.suggestion);
+    return localDisplay('blocked', blockedRow.blockedReason || blockedRow.reason || blockedRow.suggestion);
   }
 
   if (findStabilityFailureRow(sku, batchStabilityReport) || hasAnyStatus(sku, ['failed', 'partial_failed', 'error'])) {
-    return display('failed');
+    return localDisplay('failed');
   }
 
   if (hasAnyStatus(sku, ['cancelled', 'canceled'])) {
-    return display('cancelled');
+    return localDisplay('cancelled');
   }
 
   if (hasAnyStatus(sku, ['completed', 'done'])) {
-    return display('completed');
+    return localDisplay('completed');
   }
 
   if (hasAnyStatus(sku, ['running', 'recognizing', 'planning', 'generating', 'reviewing', 'exporting'])) {
-    return display('running');
+    return localDisplay('running');
   }
 
   if (isScanCandidate(sku) && hasAnyStatus(sku, ['new'])) {
-    return display('new');
+    return localDisplay('new');
   }
 
   const workflowStatus = firstMatchingStatus(sku, ['imported', 'uploaded', 'recognized', 'confirmed', 'planned', 'generated', 'reviewed', 'exported']);
   if (workflowStatus) {
-    return display(workflowStatus);
+    return localDisplay(workflowStatus);
   }
 
-  return display('pending');
+  return localDisplay('pending');
 }
 
-export function getSkuDisplayQueueHint(sku = {}, batchStabilityReport = null, batchResumePlan = null) {
-  const displayStatus = getSkuDisplayQueueStatus(sku, batchStabilityReport, batchResumePlan);
+export function getSkuDisplayQueueHint(sku = {}, batchStabilityReport = null, batchResumePlan = null, t) {
+  const displayStatus = getSkuDisplayQueueStatus(sku, batchStabilityReport, batchResumePlan, t);
   if (displayStatus.status === 'pending' && isFreshCurrentBatchPendingRecognition(sku)) {
-    return '等待开始批量识别；真实识别可能产生 API 成本，请确认后启动。';
+    return exportReportText(t,'等待开始批量识别；真实识别可能产生 API 成本，请确认后启动。');
   }
   if (displayStatus.status === 'blocked') {
     return displayStatus.reason
-      ? `已阻止：${displayStatus.reason}`
-      : '已阻止：请先查看批量恢复计划';
+      ? exportReportText(t,'已阻止：{reason}',{reason:displayStatus.reason})
+      : exportReportText(t,'已阻止：请先查看批量恢复计划');
   }
   if (sku.rowSource === 'importedElsewhere') {
-    return sku.displayHint || '已导入到其他 batch，请先处理对应 batch 后再重新导入';
+    return sku.displayHint || exportReportText(t,'已导入到其他 batch，请先处理对应 batch 后再重新导入');
   }
   return '';
 }

@@ -1,3 +1,4 @@
+import { batchReportLabel } from './batchReportLabels.js';
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -24,15 +25,16 @@ export function sanitizeSkuRetryPayload(value) {
   return value;
 }
 
-function snapshotDiff(before = {}, after = {}) {
+function snapshotDiff(before = {}, after = {}, t) {
   const keys = ['imagePlanCount', 'generatedImageCount', 'reviewResultCount'];
   return keys
     .filter((key) => before[key] !== undefined || after[key] !== undefined)
-    .map((key) => `${key}: ${before[key] ?? 0} -> ${after[key] ?? 0}`)
+    .map((key) => `${batchReportLabel('snapshot', key, t)}: ${before[key] ?? 0} -> ${after[key] ?? 0}`)
     .join(' / ');
 }
 
-export function getSkuRetryDisplayModel({ retryPlan = null, retryResult = null } = {}) {
+export function getSkuRetryDisplayModel({ retryPlan = null, retryResult = null } = {}, t) {
+  const ui = t || (value => value);
   const allowedSteps = asArray(retryPlan?.allowedRetrySteps);
   const blockedSteps = asArray(retryPlan?.blockedRetrySteps);
   const warnings = [
@@ -42,16 +44,16 @@ export function getSkuRetryDisplayModel({ retryPlan = null, retryResult = null }
   return {
     allowedSteps,
     blockedSteps,
-    allowedStepsText: allowedSteps.join(' / ') || '暂无',
-    blockedStepsText: blockedSteps.map((item) => `${item.retryStep}: ${item.reason}`).join(' / ') || '暂无',
+    allowedStepsText: allowedSteps.map(step => batchReportLabel('step', step, t)).join(' / ') || ui('暂无'),
+    blockedStepsText: blockedSteps.map((item) => `${batchReportLabel('step', item.retryStep, t)}: ${item.reason}`).join(' / ') || ui('暂无'),
     warnings,
-    warningsText: warnings.join(' / ') || '暂无',
+    warningsText: warnings.join(' / ') || ui('暂无'),
     nextSuggestedAction: retryResult?.nextSuggestedAction || retryPlan?.nextSuggestedAction || '',
-    resultStatusText: retryResult?.status || '',
+    resultStatusText: batchReportLabel('result', retryResult?.status || '', t),
     durationText: retryResult?.durationMs != null ? `${retryResult.durationMs}ms` : '',
     resultSummaryText: retryResult?.resultSummary?.message || '',
     snapshotSummary: retryResult
-      ? snapshotDiff(retryResult.beforeSnapshot || {}, retryResult.afterSnapshot || {})
+      ? snapshotDiff(retryResult.beforeSnapshot || {}, retryResult.afterSnapshot || {}, t)
       : ''
   };
 }

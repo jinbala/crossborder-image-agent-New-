@@ -56,6 +56,9 @@ export const BATCH_GUIDE_STEPS = [
 ];
 
 const STEP_INDEX = Object.fromEntries(BATCH_GUIDE_STEPS.map((step, index) => [step.id, index]));
+// Also imported by the backend SOP generator: default output stays Chinese,
+// with no dependency on browser state or the frontend translation catalog.
+const originalText = (source, values = {}) => source.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, (match, key) => Object.hasOwn(values, key) ? String(values[key]) : match);
 
 function countBy(skuTasks = [], predicate) {
   return skuTasks.filter(predicate).length;
@@ -100,24 +103,24 @@ function determineCurrentStep(batchTask = {}, counts) {
   return 'import';
 }
 
-function progressForStep(stepId, batchTask, counts) {
-  if (stepId === 'import') return counts.total ? `已导入 ${counts.total} 个 SKU` : '尚未导入 SKU';
-  if (stepId === 'template') return batchTask.workflowTemplateSnapshot ? `已选择：${batchTask.workflowTemplateSnapshot.name}` : '未选择工作流模板';
-  if (stepId === 'recognize') return counts.uploaded ? `${counts.uploaded} 个 SKU 待识别` : '识别步骤已完成或无可处理 SKU';
-  if (stepId === 'confirm') return counts.waitingConfirm ? `${counts.waitingConfirm} 个 SKU 等待人工确认` : '暂无待确认 SKU';
-  if (stepId === 'targets') return counts.confirmed ? `${counts.confirmed} 个 SKU 待应用平台 targets` : '暂无待应用平台的 SKU';
-  if (stepId === 'plan') return counts.rulesSelected ? `${counts.rulesSelected} 个 SKU 待生成方案` : '暂无待生成方案 SKU';
-  if (stepId === 'generate') return counts.planned ? `${counts.planned} 个 SKU 待生成图片` : '暂无待生成图片 SKU';
-  if (stepId === 'review') return counts.generated ? `${counts.generated} 个 SKU 待审核` : '暂无待审核 SKU';
-  if (stepId === 'export') return counts.reviewed ? `${counts.reviewed} 个 SKU 可导出` : '完成审核后即可导出';
+function progressForStep(stepId, batchTask, counts, t) {
+  if (stepId === 'import') return counts.total ? t('已导入 {count} 个 SKU', { count: counts.total }) : t('尚未导入 SKU');
+  if (stepId === 'template') return batchTask.workflowTemplateSnapshot ? t('已选择：{name}', { name: batchTask.workflowTemplateSnapshot.name }) : t('未选择工作流模板');
+  if (stepId === 'recognize') return counts.uploaded ? t('{count} 个 SKU 待识别', { count: counts.uploaded }) : t('识别步骤已完成或无可处理 SKU');
+  if (stepId === 'confirm') return counts.waitingConfirm ? t('{count} 个 SKU 等待人工确认', { count: counts.waitingConfirm }) : t('暂无待确认 SKU');
+  if (stepId === 'targets') return counts.confirmed ? t('{count} 个 SKU 待应用平台 targets', { count: counts.confirmed }) : t('暂无待应用平台的 SKU');
+  if (stepId === 'plan') return counts.rulesSelected ? t('{count} 个 SKU 待生成方案', { count: counts.rulesSelected }) : t('暂无待生成方案 SKU');
+  if (stepId === 'generate') return counts.planned ? t('{count} 个 SKU 待生成图片', { count: counts.planned }) : t('暂无待生成图片 SKU');
+  if (stepId === 'review') return counts.generated ? t('{count} 个 SKU 待审核', { count: counts.generated }) : t('暂无待审核 SKU');
+  if (stepId === 'export') return counts.reviewed ? t('{count} 个 SKU 可导出', { count: counts.reviewed }) : t('完成审核后即可导出');
   return '';
 }
 
-function buildBlockingReasons(stepId, batchTask, counts) {
+function buildBlockingReasons(stepId, batchTask, counts, t) {
   const reasons = [];
-  if (stepId !== 'import' && !counts.total) reasons.push('请先导入至少 1 个 SKU。');
-  if (!batchTask.workflowTemplateSnapshot && STEP_INDEX[stepId] > STEP_INDEX.template) reasons.push('建议先选择工作流模板。');
-  if (counts.requiresUserAction > 0) reasons.push(`${counts.requiresUserAction} 个 SKU 需要人工处理错误后再继续。`);
+  if (stepId !== 'import' && !counts.total) reasons.push(t('请先导入至少 1 个 SKU。'));
+  if (!batchTask.workflowTemplateSnapshot && STEP_INDEX[stepId] > STEP_INDEX.template) reasons.push(t('建议先选择工作流模板。'));
+  if (counts.requiresUserAction > 0) reasons.push(t('{count} 个 SKU 需要人工处理错误后再继续。', { count: counts.requiresUserAction }));
   return reasons;
 }
 
@@ -135,32 +138,32 @@ function actionLabel(action) {
   }[action] || action;
 }
 
-function buildWarnings(counts, skuTasks = []) {
+function buildWarnings(counts, skuTasks = [], t) {
   const warnings = [];
   if (counts.failed > 0) {
     const byCategory = skuTasks.reduce((map, sku) => {
       const key = sku.lastErrorCategory || sku.error?.category || 'unknown';
       if (statusOf(sku) === 'failed' || sku.queueStatus === 'failed') map[key] = (map[key] || 0) + 1;
       return map;
-    }, {});
+    }, Object.create(null));
     warnings.push({
       code: 'FAILED_SKUS',
       level: 'warn',
-      message: `${counts.failed} 个 SKU 失败：${Object.entries(byCategory).map(([key, value]) => `${key} ${value}`).join(' / ')}`
+      message: t('{count} 个 SKU 失败：{categories}', { count: counts.failed, categories: Object.entries(byCategory).map(([key, value]) => `${key} ${value}`).join(' / ') })
     });
   }
   if (counts.retryable > 0) {
     warnings.push({
       code: 'RETRYABLE_FAILURES',
       level: 'warn',
-      message: `${counts.retryable} 个失败可重试，建议先重试可重试失败。`
+      message: t('{count} 个失败可重试，建议先重试可重试失败。', { count: counts.retryable })
     });
   }
   if (counts.requiresUserAction > 0) {
     warnings.push({
       code: 'REQUIRES_USER_ACTION',
       level: 'error',
-      message: `${counts.requiresUserAction} 个 SKU 需要人工处理，例如补 API Key、确认商品信息或修复图片。`
+      message: t('{count} 个 SKU 需要人工处理，例如补 API Key、确认商品信息或修复图片。', { count: counts.requiresUserAction })
     });
   }
   return warnings;
@@ -172,14 +175,14 @@ export function getNextPendingConfirmSku(batchTask = {}) {
   )) || null;
 }
 
-export function getBatchGuideState(batchTask = {}) {
+export function getBatchGuideState(batchTask = {}, t = originalText) {
   const skuTasks = Array.isArray(batchTask.skuTasks) ? batchTask.skuTasks : [];
   const counts = classifyCounts(skuTasks);
   const currentStepId = determineCurrentStep(batchTask, counts);
   const currentIndex = STEP_INDEX[currentStepId] ?? 0;
-  const warnings = buildWarnings(counts, skuTasks);
+  const warnings = buildWarnings(counts, skuTasks, t);
   const steps = BATCH_GUIDE_STEPS.map((step, index) => {
-    const blockingReasons = buildBlockingReasons(step.id, batchTask, counts);
+    const blockingReasons = buildBlockingReasons(step.id, batchTask, counts, t);
     const isCurrent = step.id === currentStepId;
     let status = 'pending';
     if (index < currentIndex) status = 'done';
@@ -187,17 +190,19 @@ export function getBatchGuideState(batchTask = {}) {
     if (index === currentIndex + 1 && !blockingReasons.length) status = 'available';
     const secondaryActions = [];
     if (isCurrent && counts.retryable > 0) {
-      secondaryActions.push({ id: 'retry_failed', label: '重试可重试失败', action: 'retry_failed' });
+      secondaryActions.push({ id: 'retry_failed', label: t('重试可重试失败'), action: 'retry_failed' });
     }
     if (isCurrent && counts.requiresUserAction > 0) {
-      secondaryActions.push({ id: 'show_user_actions', label: '查看人工处理项', action: 'show_user_actions' });
+      secondaryActions.push({ id: 'show_user_actions', label: t('查看人工处理项'), action: 'show_user_actions' });
     }
     return {
       ...step,
+      title: t(step.title),
+      description: t(step.description),
       status,
-      progressText: progressForStep(step.id, batchTask, counts),
+      progressText: progressForStep(step.id, batchTask, counts, t),
       blockingReasons,
-      primaryAction: { id: step.nextAction, label: actionLabel(step.nextAction), action: step.nextAction },
+      primaryAction: { id: step.nextAction, label: t(actionLabel(step.nextAction)), action: step.nextAction },
       secondaryActions
     };
   });

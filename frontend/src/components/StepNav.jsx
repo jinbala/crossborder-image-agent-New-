@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useLocale } from '../i18n/LocaleProvider.jsx';
 
 const steps = [
   ['product', '商品信息'],
@@ -10,8 +11,9 @@ const steps = [
 ];
 
 export default function StepNav({ taskId }) {
+  const { t } = useLocale();
   return (
-    <nav className="mb-5 flex flex-wrap gap-2">
+    <nav data-task-step-nav className="mb-5 flex flex-wrap gap-2">
       {steps.map(([key, label]) => (
         <NavLink
           key={key}
@@ -25,7 +27,7 @@ export default function StepNav({ taskId }) {
             ].join(' ')
           }
         >
-          {label}
+          {t(label)}
         </NavLink>
       ))}
     </nav>

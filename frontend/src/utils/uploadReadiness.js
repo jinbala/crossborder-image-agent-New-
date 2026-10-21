@@ -1,3 +1,5 @@
+import {exportReportText, exportReportLabel, exportReportCards, exportReportBoolean} from './exportReportLabels.js';
+
 const platformOptions = ['temu', 'miaoshou', 'amazon', 'noon', 'ozon', 'rakuten'];
 const sandboxConfigKey = 'uploadSandboxConfig';
 
@@ -105,10 +107,10 @@ function issueText(items = []) {
     .join(' / ');
 }
 
-export function getUploadReadinessDisplayModel(report) {
+export function getUploadReadinessDisplayModel(report, t) {
   if (!report) {
     return {
-      emptyText: '暂无上传前检查报告。请先选择平台，然后点击“执行上传前检查”。',
+      emptyText: exportReportText(t, '暂无上传前检查报告。请先选择平台，然后点击“执行上传前检查”。'),
       summaryCards: [],
       platformRows: [],
       skuRows: [],
@@ -116,14 +118,14 @@ export function getUploadReadinessDisplayModel(report) {
       warningText: '',
       recommendationText: '',
       nextSuggestedAction: '',
-      notice: uploadReadinessNotice
+      notice: exportReportText(t, uploadReadinessNotice)
     };
   }
   const summary = report.summary || {};
   return {
     emptyText: '',
-    notice: uploadReadinessNotice,
-    summaryCards: [
+    notice: exportReportText(t, uploadReadinessNotice),
+    summaryCards: exportReportCards([
       { label: 'total SKU', value: String(summary.totalSku || 0) },
       { label: 'ready SKU', value: String(summary.readySku || 0) },
       { label: 'blocked SKU', value: String(summary.blockedSku || 0) },
@@ -133,11 +135,16 @@ export function getUploadReadinessDisplayModel(report) {
       { label: 'noReview SKU', value: String(summary.noReviewSku || 0) },
       { label: 'highRisk SKU', value: String(summary.highRiskSku || 0) },
       { label: 'mockImage SKU', value: String(summary.mockImageSku || 0) },
-      { label: 'canUploadNow', value: String(summary.canUploadNow === true) }
-    ],
-    platformRows: asArray(report.platformReports).map((row) => sanitizeForDisplay(row)),
+      { label: 'canUploadNow', value: exportReportBoolean(summary.canUploadNow === true, t) }
+    ], t),
+    platformRows: asArray(report.platformReports).map((row) => ({...sanitizeForDisplay(row),statusDisplay:exportReportLabel('status',row.status,t),realUploadEnabledText:exportReportBoolean(row.realUploadEnabled,t)})),
     skuRows: asArray(report.skuReports).map((row) => ({
       ...sanitizeForDisplay(row),
+      statusDisplay: exportReportLabel('status',row.status,t),
+      reviewStatusDisplay: exportReportLabel('status',row.reviewStatus,t),
+      usesMockImagesText: exportReportBoolean(row.usesMockImages,t),
+      hasHighRiskIssuesText: exportReportBoolean(row.hasHighRiskIssues,t),
+      readyText: exportReportBoolean(row.ready,t),
       missingFieldsText: asArray(row.missingFields).join(', ') || '-',
       missingImagesText: asArray(row.missingImages).join(', ') || '-',
       blockingText: issueText(row.blockingIssues),

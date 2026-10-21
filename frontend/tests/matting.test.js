@@ -170,7 +170,7 @@ test('matting page contains Chinese guidance buttons warnings and safe states', 
   assert.match(page, /第三方抠图 API 可能产生费用/);
   assert.match(page, /第三方抠图 API 未配置/);
   assert.match(page, /对比抠图结果/);
-  assert.match(page, /质量评分/);
+  assert.match(page, /mattingQualityLabel\(safe.qualityScore, t\)/);
   assert.match(page, /fallback/);
   assert.match(app, /matting/);
   assert.match(layout, /主体抠图/);

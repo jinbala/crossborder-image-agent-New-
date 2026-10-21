@@ -83,11 +83,21 @@ function fakeProvider({ status = 'success', error = null } = {}) {
   };
 }
 
+test('single-image approval is strict and precedes task reads, matting, image calls and fallback writes', async () => {
+  const calls = { read: 0, matting: 0, generation: 0, fallback: 0 };
+  for (const confirmReal of [undefined, false, 'true', 1, {}]) await assert.rejects(runSingleImageGeneration({ taskId: 'single-real-task', imageType: 'main_image', mattingProvider: 'image2', confirmReal }, {
+    taskReader: async () => { calls.read++; return task(); }, mattingRunner: async () => { calls.matting++; return {}; },
+    imageProvider: { generate: async () => { calls.generation++; return {}; } }, mockGenerator: async () => { calls.fallback++; return {}; }
+  }), (err) => err.statusCode === 403 && err.code === 'REAL_GENERATION_NOT_CONFIRMED');
+  assert.deepEqual(calls, { read: 0, matting: 0, generation: 0, fallback: 0 });
+});
+
 test('single image generation supports main feature and detail without mutating task', async () => {
   for (const imageType of imageTypes) {
     const sourceTask = task();
     const before = JSON.parse(JSON.stringify(sourceTask));
     const report = await runSingleImageGeneration({
+      confirmReal: true,
       taskId: sourceTask.id,
       imageType,
       realMode: 'text_to_image',
@@ -119,6 +129,7 @@ test('single image generation supports main feature and detail without mutating 
 
 test('single image generation records Image2 matting fallback to sharp', async () => {
   const report = await runSingleImageGeneration({
+    confirmReal: true,
     taskId: 'single-real-task',
     imageType: 'detail_image',
     mattingProvider: 'image2'
@@ -144,6 +155,7 @@ test('single image generation records Image2 matting fallback to sharp', async (
 
 test('single image generation falls back to mock when real provider fails', async () => {
   const report = await runSingleImageGeneration({
+    confirmReal: true,
     taskId: 'single-real-task',
     imageType: 'feature_image'
   }, {
@@ -179,6 +191,7 @@ test('single image generation falls back to mock when real provider fails', asyn
 
 test('single image generation report is available by task id from memory', async () => {
   await runSingleImageGeneration({
+    confirmReal: true,
     taskId: 'single-real-task',
     imageType: 'main_image'
   }, {

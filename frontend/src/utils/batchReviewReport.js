@@ -1,3 +1,4 @@
+import { batchReportLabel } from './batchReportLabels.js';
 const EMPTY_TEXT = '暂无批量审核报告，请先执行批量审核或刷新当前 batch。';
 
 function asArray(value) {
@@ -26,10 +27,11 @@ export function sanitizeBatchReviewReport(value) {
   return value;
 }
 
-export function getBatchReviewReportDisplayModel(report) {
+export function getBatchReviewReportDisplayModel(report, t) {
+  const ui = t || (value => value);
   if (!report) {
     return {
-      emptyText: EMPTY_TEXT,
+      emptyText: ui(EMPTY_TEXT),
       overviewCards: [],
       riskCards: [],
       fixSummaryCards: [],
@@ -39,7 +41,7 @@ export function getBatchReviewReportDisplayModel(report) {
       topRiskSku: [],
       recommendations: [],
       issueRows: [],
-      mockInfoNotice: 'mock 提示仅表示流程测试信息，不代表真实平台上传失败。'
+      mockInfoNotice: ui('mock 提示仅表示流程测试信息，不代表真实平台上传失败。')
     };
   }
   const summary = report.summary || {};
@@ -50,34 +52,34 @@ export function getBatchReviewReportDisplayModel(report) {
     .slice(0, 8)
     .map(([code, count]) => ({ label: code, value: count }));
   return {
-    emptyText: meta.totalSku === 0 ? '当前 batch 暂无 SKU，批量审核报告为空。' : '',
+    emptyText: meta.totalSku === 0 ? ui('当前 batch 暂无 SKU，批量审核报告为空。') : '',
     overviewCards: [
-      { label: 'SKU 总数', value: meta.totalSku || 0 },
-      { label: '通过 SKU', value: summary.passedSku || 0 },
-      { label: '失败 SKU', value: summary.failedSku || 0 },
-      { label: '需人工复查 SKU', value: summary.needsManualReviewSku || 0 },
-      { label: '仅 mock 提示 SKU', value: summary.mockOnlySku || 0 },
-      { label: '未审核 SKU', value: summary.noReviewSku || 0 }
+      { label: ui('SKU 总数'), value: meta.totalSku || 0 },
+      { label: ui('通过 SKU'), value: summary.passedSku || 0 },
+      { label: ui('失败 SKU'), value: summary.failedSku || 0 },
+      { label: ui('需人工复查 SKU'), value: summary.needsManualReviewSku || 0 },
+      { label: ui('仅 mock 提示 SKU'), value: summary.mockOnlySku || 0 },
+      { label: ui('未审核 SKU'), value: summary.noReviewSku || 0 }
     ],
     riskCards: [
-      { label: 'fatal', value: summary.fatalCount || 0 },
-      { label: 'high', value: summary.highCount || 0 },
-      { label: 'medium', value: summary.mediumCount || 0 },
-      { label: 'low', value: summary.lowCount || 0 },
-      { label: 'info', value: summary.infoCount || 0 },
-      { label: 'mockInfo', value: summary.mockInfoCount || 0 },
-      { label: '真实合规问题', value: summary.realComplianceIssueCount || 0 },
-      { label: 'mock only issue', value: summary.mockOnlyIssueCount || 0 }
+      { label: batchReportLabel('severity', 'fatal', t), value: summary.fatalCount || 0 },
+      { label: batchReportLabel('severity', 'high', t), value: summary.highCount || 0 },
+      { label: batchReportLabel('severity', 'medium', t), value: summary.mediumCount || 0 },
+      { label: batchReportLabel('severity', 'low', t), value: summary.lowCount || 0 },
+      { label: batchReportLabel('severity', 'info', t), value: summary.infoCount || 0 },
+      { label: batchReportLabel('severity', 'mockInfo', t), value: summary.mockInfoCount || 0 },
+      { label: ui('真实合规问题'), value: summary.realComplianceIssueCount || 0 },
+      { label: t ? ui('仅 mock 流程问题') : 'mock only issue', value: summary.mockOnlyIssueCount || 0 }
     ],
     fixSummaryCards: [
-      { label: '总修正建议数', value: batchFixSummary.totalFixSuggestions || 0 },
-      { label: '可自动修正候选', value: batchFixSummary.autoFixCandidateCount || 0 },
-      { label: '需要人工确认', value: batchFixSummary.manualConfirmRequiredCount || 0 },
-      { label: 'mock 提示', value: batchFixSummary.mockOnlyCount || 0 }
+      { label: ui('总修正建议数'), value: batchFixSummary.totalFixSuggestions || 0 },
+      { label: ui('可自动修正候选'), value: batchFixSummary.autoFixCandidateCount || 0 },
+      { label: ui('需要人工确认'), value: batchFixSummary.manualConfirmRequiredCount || 0 },
+      { label: ui('mock 提示'), value: batchFixSummary.mockOnlyCount || 0 }
     ],
     fixActionRows: Object.entries(batchFixSummary.byActionType || {})
       .sort((a, b) => b[1] - a[1])
-      .map(([label, value]) => ({ label, value })),
+      .map(([label, value]) => ({ key: label, label: batchReportLabel('action', label, t), value })),
     topFixSuggestions: asArray(batchFixSummary.topFixSuggestions),
     fixRecommendations: asArray(batchFixSummary.recommendations),
     topRiskSku: asArray(report.topRiskSku),
@@ -86,7 +88,7 @@ export function getBatchReviewReportDisplayModel(report) {
     issuesByImageType: report.issuesByImageType || {},
     issuesBySeverity: report.issuesBySeverity || {},
     mockInfoSummary: report.mockInfoSummary || {},
-    mockInfoNotice: 'mock 提示仅表示流程测试信息，不代表真实平台上传失败。'
+    mockInfoNotice: ui('mock 提示仅表示流程测试信息，不代表真实平台上传失败。')
   };
 }
 

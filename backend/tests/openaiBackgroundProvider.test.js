@@ -523,7 +523,7 @@ test('OpenAI background provider defaults to gpt-image-2 and saves base64 image 
     assert.equal(calls[0].model, 'gpt-image-2');
     assert.match(calls[0].prompt, /professional e-commerce lifestyle product photography/i);
 
-    const stats = await fs.stat(path.join(paths.rootDir, result.output.filePath));
+    const stats = await fs.stat(path.resolve(paths.rootDir, result.output.filePath));
     assert.ok(stats.size > 100);
   } finally {
     if (previousOpenAIImageModel == null) delete process.env.OPENAI_IMAGE_MODEL;

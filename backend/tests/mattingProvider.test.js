@@ -8,6 +8,7 @@ import { getMattingProvider } from '../src/providers/matting/index.js';
 import { extractSubjectWithFallback } from '../src/providers/matting/index.js';
 import { SharpMattingProvider } from '../src/providers/matting/sharpMattingProvider.js';
 import { ExternalMattingProvider } from '../src/providers/matting/externalMattingProvider.js';
+import { RembgMattingProvider } from '../src/providers/matting/rembgMattingProvider.js';
 import { paths } from '../src/services/db.js';
 
 const tempDir = path.join(os.tmpdir(), `crossborder-matting-provider-${process.pid}`);
@@ -91,6 +92,7 @@ test('sharpMattingProvider warns on complex backgrounds', async () => {
 
 test('matting provider selector defaults to sharp and external reports missing config', async () => {
   assert.equal(getMattingProvider('sharp').provider, 'sharp');
+  assert.equal(getMattingProvider('rembg').provider, 'rembg');
   const external = new ExternalMattingProvider({ apiKey: '', baseURL: '' });
   const result = await external.extractSubject({
     task: { id: 'external-matting' },
@@ -100,6 +102,40 @@ test('matting provider selector defaults to sharp and external reports missing c
 
   assert.equal(result.status, 'failed');
   assert.equal(result.error.code, 'MISSING_MATTING_CONFIG');
+});
+
+test('rembg provider runs a local command contract and derives cropped subject plus mask', async () => {
+  const provider = new RembgMattingProvider({
+    command: 'fake-rembg',
+    model: 'test-local-model',
+    commandRunner: async (_command, args) => {
+      const outputPath = args.at(-1);
+      await sharp({ create: { width: 120, height: 100, channels: 4, background: '#00000000' } })
+        .composite([{ input: Buffer.from('<svg width="120" height="100"><rect x="30" y="20" width="60" height="60" fill="#d23b3b"/></svg>') }])
+        .png()
+        .toFile(outputPath);
+      return { code: 0, stderr: '' };
+    }
+  });
+  const result = await provider.extractSubject({ task: { id: 'rembg-local-test' }, sourceImage: sourceImage(plainPath) });
+  assert.equal(result.status, 'success');
+  assert.equal(result.provider, 'rembg');
+  assert.equal(result.metadata.offline, true);
+  assert.equal(result.metadata.networkUsedForInference, false);
+  assert.equal(result.output.hasAlpha, true);
+  assert.ok(result.output.width < 120);
+  assert.ok(result.output.maskPath.endsWith('-mask.png'));
+  await Promise.all([result.output.subjectPngPath, result.output.maskPath].map((filePath) => fs.rm(filePath, { force: true })));
+});
+
+test('real rembg execution refuses implicit model download before license consent', async () => {
+  const previous = { REMBG_MODEL_LICENSE_ACCEPTED: process.env.REMBG_MODEL_LICENSE_ACCEPTED, REMBG_HOME: process.env.REMBG_HOME };
+  process.env.REMBG_MODEL_LICENSE_ACCEPTED = 'false'; process.env.REMBG_HOME = path.join(tempDir, 'no-models-no-consent');
+  try {
+    const provider = new RembgMattingProvider({ command: process.execPath, model: 'u2net' });
+    const result = await provider.extractSubject({ task: { id: 'no-download' }, sourceImage: sourceImage(plainPath) });
+    assert.equal(result.status, 'failed'); assert.equal(result.error.code, 'REMBG_MODEL_LICENSE_REQUIRED');
+  } finally { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
 });
 
 test('external matting provider saves base64 subject and mask responses', async () => {

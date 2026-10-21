@@ -82,7 +82,7 @@ test('generates mock preview images for all eight plan types', async () => {
       outputIndex: index + 1
     });
 
-    const absolutePath = path.join(paths.rootDir, result.filePath);
+    const absolutePath = path.resolve(paths.rootDir, result.filePath);
     const stats = await fs.stat(absolutePath);
     assert.ok(stats.size > 1000);
     assert.equal(result.status, 'succeeded');

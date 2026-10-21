@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { grantAsset } from './ownershipService.js';
 import { getBatchTask, getTask, paths } from './db.js';
 import {
   asArray,
@@ -35,6 +36,7 @@ function normalizeOptions(options = {}) {
     platforms: normalizePlatforms(options.platforms),
     sourcePackageId: options.sourcePackageId || '',
     includeMockImages: options.includeMockImages !== false,
+    includeRealSamples: options.includeRealSamples === true,
     confirmExport: options.confirmExport === true
   };
 }
@@ -81,17 +83,17 @@ function recommendationsFor(summary = {}) {
   return recommendations;
 }
 
-export async function buildListingArtifacts(batchId, options = {}) {
+export async function buildListingArtifacts(batchId, options = {}, { imagePaths, snapshot } = {}) {
   const normalized = normalizeOptions(options);
-  const batch = await requireBatch(batchId);
-  const tasks = await tasksForBatch(batch);
+  const batch = snapshot?.batch || await requireBatch(batchId);
+  const tasks = snapshot?.tasks || await tasksForBatch(batch);
   const taskById = new Map(tasks.map((task) => [task.id, task]));
-  const rowsByPlatform = {};
+  const rowsByPlatform = Object.create(null);
   const files = {};
   const mapping = {
     batchId,
     generatedAt: nowIso(),
-    platforms: {}
+    platforms: Object.create(null)
   };
   const summary = {
     batchId,
@@ -112,13 +114,16 @@ export async function buildListingArtifacts(batchId, options = {}) {
       platformId,
       batch,
       taskById,
-      includeMockImages: normalized.includeMockImages
+      imagePaths,
+      includeMockImages: normalized.includeMockImages,
+      includeRealSamples: normalized.includeRealSamples
     });
     rowsByPlatform[platformId] = platformRows.rows.length;
     files[`${platformId}-listing.csv`] = rowsToCsv(platformRows.rows, platformRows.columns);
     mapping.platforms[platformId] = {
       platform: platformId,
-      fields: Object.assign({}, ...Object.values(platformRows.fieldsBySku || {}))
+      fields: Object.assign({}, ...Object.values(platformRows.fieldsBySku || {})),
+      targets: platformRows.targetRows || []
     };
     summary.missingRequiredFields.push(...platformRows.missingRequiredFields);
     summary.blockedFields.push(...platformRows.blockedFields);
@@ -178,6 +183,7 @@ export async function createListingCsvExport(batchId, options = {}) {
   const artifacts = await buildListingArtifacts(batchId, options);
   const exportId = safeSegment(`listing-csv-${batchId}-${timestampSafe()}`, 'listing-csv');
   const exportRoot = safeOutputPath('listing-csv', exportId);
+  grantAsset(exportRoot, 'batch', batchId);
   await fs.mkdir(path.dirname(exportRoot), { recursive: true });
   await fs.mkdir(exportRoot, { recursive: false });
   for (const [fileName, content] of Object.entries(artifacts.files)) {

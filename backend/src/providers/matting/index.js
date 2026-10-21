@@ -2,6 +2,7 @@ import { SharpMattingProvider } from './sharpMattingProvider.js';
 import { ExternalMattingProvider } from './externalMattingProvider.js';
 import { Image2MattingProvider } from './image2MattingProvider.js';
 import { MockMattingProvider } from './mockMattingProvider.js';
+import { RembgMattingProvider } from './rembgMattingProvider.js';
 
 export function getMattingProvider(providerName = process.env.MATTING_PROVIDER || 'sharp', options = {}) {
   const provider = String(providerName || 'sharp').toLowerCase();
@@ -9,6 +10,7 @@ export function getMattingProvider(providerName = process.env.MATTING_PROVIDER |
   if (provider === 'mock') return new MockMattingProvider();
   if (provider === 'external') return new ExternalMattingProvider(options.external);
   if (provider === 'image2') return new Image2MattingProvider(options.image2);
+  if (provider === 'rembg') return new RembgMattingProvider(options.rembg);
   return new SharpMattingProvider();
 }
 
@@ -40,4 +42,4 @@ export async function extractSubjectWithFallback({
   };
 }
 
-export { SharpMattingProvider, ExternalMattingProvider, Image2MattingProvider, MockMattingProvider };
+export { SharpMattingProvider, ExternalMattingProvider, Image2MattingProvider, MockMattingProvider, RembgMattingProvider };

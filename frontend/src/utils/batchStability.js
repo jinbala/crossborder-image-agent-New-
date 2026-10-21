@@ -37,10 +37,10 @@ export function sanitizeBatchStabilityReport(value) {
   return value;
 }
 
-export function getBatchStabilityDisplayModel(report) {
+export function getBatchStabilityDisplayModel(report, t = value => value) {
   if (!report) {
     return {
-      emptyText: EMPTY_TEXT,
+      emptyText: t(EMPTY_TEXT),
       summaryCards: [],
       stepRows: [],
       skuRows: [],
@@ -48,31 +48,35 @@ export function getBatchStabilityDisplayModel(report) {
       resumePlan: { canResume: false, safeResumeSteps: [], blockedReasons: [], recommendations: [] },
       recommendations: [],
       warnings: [],
-      readOnlyNotice: '本阶段仅提供断点续跑分析，不会自动恢复或重试。'
+      readOnlyNotice: t('本阶段仅提供断点续跑分析，不会自动恢复或重试。')
     };
   }
   const summary = report.summary || {};
-  const stepRows = Object.entries(report.stepSummary || {}).map(([step, row]) => ({
+  const stepRows = Object.entries(report.stepSummary || {}).map(([step, rawRow]) => {
+    const row = rawRow || {};
+    const knownLabel = Object.hasOwn(stepLabels, step) ? stepLabels[step] : null;
+    return {
     step,
-    label: row.label || stepLabels[step] || step,
+    label: knownLabel && (!row.label || row.label === knownLabel) ? t(knownLabel) : row.label || step,
     total: row.total || 0,
     completed: row.completed || 0,
     running: row.running || 0,
     failed: row.failed || 0,
     pending: row.pending || 0,
     needsManualReview: row.needsManualReview || 0
-  }));
+    };
+  });
   return {
-    emptyText: summary.totalSku === 0 ? '当前 batch 暂无 SKU。' : '',
+    emptyText: summary.totalSku === 0 ? t('当前 batch 暂无 SKU。') : '',
     summaryCards: [
-      { label: 'SKU 总数', value: summary.totalSku || 0 },
-      { label: '已完成', value: summary.completedSku || 0 },
-      { label: '运行中', value: summary.runningSku || 0 },
-      { label: '失败', value: summary.failedSku || 0 },
-      { label: '待处理', value: summary.pendingSku || 0 },
-      { label: '需人工复查', value: summary.needsManualReviewSku || 0 },
-      { label: '未审核', value: summary.noReviewSku || 0 },
-      { label: '进度百分比', value: `${summary.progressPercent || 0}%` }
+      { label: t('SKU 总数'), value: summary.totalSku || 0 },
+      { label: t('已完成'), value: summary.completedSku || 0 },
+      { label: t('运行中'), value: summary.runningSku || 0 },
+      { label: t('失败'), value: summary.failedSku || 0 },
+      { label: t('待处理'), value: summary.pendingSku || 0 },
+      { label: t('需人工复查'), value: summary.needsManualReviewSku || 0 },
+      { label: t('未审核'), value: summary.noReviewSku || 0 },
+      { label: t('进度百分比'), value: `${summary.progressPercent || 0}%` }
     ],
     stepRows,
     skuRows: asArray(report.skuProgress),
@@ -80,7 +84,7 @@ export function getBatchStabilityDisplayModel(report) {
     resumePlan: report.resumePlan || { canResume: false, safeResumeSteps: [], blockedReasons: [], recommendations: [] },
     recommendations: asArray(report.recommendations),
     warnings: asArray(report.warnings),
-    readOnlyNotice: '本阶段仅提供断点续跑分析，不会自动恢复或重试。请先处理需要人工确认的 SKU，再执行后续批量恢复。'
+    readOnlyNotice: t('本阶段仅提供断点续跑分析，不会自动恢复或重试。请先处理需要人工确认的 SKU，再执行后续批量恢复。')
   };
 }
 

@@ -39,13 +39,14 @@ export function normalizeStressTestPayload(input = {}) {
     exportZip: Boolean(input.exportZip)
   };
   if (input.batchId) payload.batchId = String(input.batchId);
+  if (input.confirmPaidApi === true) payload.confirmPaidApi = true;
   return payload;
 }
 
-export function formatStressDuration(ms = 0) {
+export function formatStressDuration(ms = 0, t = null) {
   const value = Number(ms) || 0;
   if (value < 1000) return `${Math.round(value)} ms`;
-  return `${(value / 1000).toFixed(2)} 秒`;
+  return `${(value / 1000).toFixed(2)} ${t ? t('秒') : '秒'}`;
 }
 
 export function stressStatusLabel(status) {

@@ -28,6 +28,19 @@ The current version is v3.1. Image recognition can run with mock, Qwen, OpenAI, 
 - ZIP export with images and structured reports
 - Frontend task progress and status-aware buttons
 - User settings center for local defaults, provider preferences, import scan preferences, queue defaults, safety flags, UI preferences, and cost estimates
+- Clean-room operations workbench for spreadsheet/link image collection, resumable ZIP downloads, SKU-folder image packs, drag ordering, target-KB compression, perceptual deduplication, role overrides, naming placeholders, square-image generation, and optional Sharp/rembg/API batch matting
+- Chrome/Edge Manifest V3 Temu deep-collection helper under `browser-extension/temu-deep-collector`; v0.4.0 extracts lazy/structured/variant images and can return authorized-session image bytes to localhost (requires the user's own logged-in browser session and live-site acceptance testing)
+- RPA web/Windows-client architecture, feature inventory, completion status, acceptance gates, and roadmap: `docs/rpa-web-desktop-development-status.md`
+- Web platform + Windows client product requirements, scope, acceptance criteria, current-stage mapping, and milestones: `docs/xingya-web-client-development-requirements.md`
+- Windows desktop 0.23.0 localizes controlled export/preflight/payload/sandbox/safety report labels, scan feedback and queue hints without changing business content or downloaded JSON. It also fixes real-sample preview options and strict capability-flag display. Source-file preflight, per-target export isolation, immutable ZIP history and queue safety remain included, with extension 0.5.3. See [implementation progress](docs/implementation-progress.md), [0.23.0 verification](docs/verification-0.23.0.md), [language coverage](docs/i18n-progress.md) and [desktop guide](desktop/README.md). Full bilingual coverage, live-site, model-license, quality and deployment gates remain explicit; build and executable acceptance status are recorded separately.
+
+Workbench pages after startup:
+
+- Operations overview: http://localhost:5173/workbench
+- Image collection: http://localhost:5173/workbench/collection
+- SKU image packs: http://localhost:5173/workbench/sku-pack
+- Detailed usage: `docs/user-manual.md`
+- Clean-room boundaries: `docs/clean-room-workbench.md`
 
 Upload limits:
 

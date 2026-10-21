@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useLocale } from '../i18n/LocaleProvider.jsx';
+import { approveImageGeneration } from '../utils/imageGenerationApproval.js';
+import { approvePaidOperation } from '../utils/paidOperationApproval.js';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Images, X } from 'lucide-react';
 import StepNav from '../components/StepNav.jsx';
@@ -6,7 +9,7 @@ import TaskProgress from '../components/TaskProgress.jsx';
 import Section from '../components/Section.jsx';
 import TextLayoutEditor from '../components/TextLayoutEditor.jsx';
 import { ASSET_BASE, api } from '../services/api.js';
-import { ErrorMessage, PrimaryButton, useTask, DisabledReason } from './pageUtils.jsx';
+import { ErrorMessage, PrimaryButton, useTask, DisabledReason, TaskLoadFailure } from './pageUtils.jsx';
 import { actionDisabledReason, canRunAction } from '../utils/taskWorkflow.js';
 import { getImageSourceStatus } from '../utils/imageSourceStatus.js';
 import { normalizeClientCompositeSettings as normalizeCompositeSettingsValue } from '../utils/compositeSettings.js';
@@ -37,8 +40,8 @@ const imageTypeLabels = {
   variant_image: '容量/颜色/规格变体图'
 };
 
-function imageTitle(image) {
-  return imageTypeLabels[image.type] || image.title || image.type;
+function imageTitle(image, t) {
+  return imageTypeLabels[image.type] ? t(imageTypeLabels[image.type]) : image.title || image.type;
 }
 
 function riskClass(level) {
@@ -47,8 +50,8 @@ function riskClass(level) {
   return 'border-slate-200 bg-slate-50 text-slate-600';
 }
 
-function promptPreview(image, plan) {
-  return image.promptPreview || image.prompt?.slice(0, 360) || plan?.prompt?.slice(0, 360) || '暂无 Prompt 预览';
+function promptPreview(image, plan, t) {
+  return image.promptPreview || image.prompt?.slice(0, 360) || plan?.prompt?.slice(0, 360) || t('暂无 Prompt 预览');
 }
 
 function qualityClass(level) {
@@ -95,8 +98,8 @@ function normalizeClientCompositeSettings(value = {}) {
   return normalizeCompositeSettingsValue(value);
 }
 
-function targetDisplayLabel(target = {}) {
-  return `${target.platformName || target.platform || target.platformId || '平台'} / ${target.site || 'US'} / ${target.language || 'English'}`;
+function targetDisplayLabel(target = {}, t) {
+  return `${target.platformName || target.platform || target.platformId || t('平台')} / ${target.site || 'US'} / ${target.language || 'English'}`;
 }
 
 function groupGeneratedImages(task = {}) {
@@ -136,9 +139,10 @@ function groupGeneratedImages(task = {}) {
 }
 
 export default function GeneratePage() {
+  const { t } = useLocale();
   const { taskId } = useParams();
   const navigate = useNavigate();
-  const { task, setTask, loading, error, setError } = useTask(taskId);
+  const { task, setTask, loading, error, setError, refresh } = useTask(taskId);
   const [busy, setBusy] = useState(false);
   const [previewImage, setPreviewImage] = useState(null);
   const [regeneratingPlanId, setRegeneratingPlanId] = useState('');
@@ -228,6 +232,7 @@ export default function GeneratePage() {
     setSingleImageBusy(true);
     setSingleImageError('');
     try {
+      if (!await approveImageGeneration(api, { taskId, mattingProvider: singleMattingProvider }, t, (message) => window.confirm(message))) return;
       const result = await api.runSingleImageGeneration({
         taskId,
         imageType: singleImageType,
@@ -264,6 +269,7 @@ export default function GeneratePage() {
     setThreeSampleBusy(true);
     setThreeSampleError('');
     try {
+      if (!await approveImageGeneration(api, { taskId, mattingProvider: singleMattingProvider, count: 3 }, t, (message) => window.confirm(message))) return;
       const result = await api.runThreeSampleGeneration({
         taskId,
         samples: selectedThreeSamples,
@@ -288,7 +294,9 @@ export default function GeneratePage() {
     setRegeneratingPlanId(planId);
     setCardErrors((current) => ({ ...current, [planId]: '' }));
     try {
-      const result = await api.regenerateImage(taskId, planId, { mode, realMode, ...extra });
+      const approval = mode === 'real_background' ? await approvePaidOperation(api, { kinds: ['background', 'matting'], target: taskId, count: 1 }, t, (message) => window.confirm(message)) : {};
+      if (!approval) return;
+      const result = await api.regenerateImage(taskId, planId, { mode, realMode, ...extra, ...approval });
       setTask(result.task);
     } catch (err) {
       setCardErrors((current) => ({ ...current, [planId]: err.message }));
@@ -364,7 +372,9 @@ export default function GeneratePage() {
     setPreviewingMattingPlanId(planId);
     setCardErrors((current) => ({ ...current, [planId]: '' }));
     try {
-      const result = await api.previewMatting(taskId, planId, sourceImageId);
+      const approval = await approvePaidOperation(api, { kinds: ['matting'], target: taskId, count: 1, allowMock: true }, t, (message) => window.confirm(message));
+      if (!approval) return;
+      const result = await api.previewMatting(taskId, planId, sourceImageId, approval);
       setMattingPreviewByPlan((current) => ({ ...current, [planId]: result.preview }));
     } catch (err) {
       setCardErrors((current) => ({ ...current, [planId]: err.message }));
@@ -373,10 +383,11 @@ export default function GeneratePage() {
     }
   }
 
-  if (loading) return <div className="text-sm text-slate-500">正在加载生成工作区...</div>;
+  if (loading) return <div className="text-sm text-slate-500">{t("正在加载生成工作区...")}</div>;
+  if (!task) return <TaskLoadFailure error={error} onRetry={refresh} />;
 
   const canGenerate = canRunAction(task.status, 'generateImages');
-  const generateReason = !imagePlans.length ? '请先生成图片方案。' : actionDisabledReason(task.status, 'generateImages');
+  const generateReason = !imagePlans.length ? t('请先生成图片方案。') : actionDisabledReason(task.status, 'generateImages', t);
 
   return (
     <div className="space-y-5">
@@ -385,8 +396,8 @@ export default function GeneratePage() {
       <ErrorMessage error={error} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-ink">图片生成与预览</h1>
-          <p className="mt-1 text-sm text-slate-500">当前使用 mock 生图：本地生成模板化预览图，用来检查 8 类图片结构和文案风险。</p>
+          <h1 className="text-2xl font-semibold text-ink">{t("图片生成与预览")}</h1>
+          <p className="mt-1 text-sm text-slate-500">{t("当前使用 mock 生图：本地生成模板化预览图，用来检查 8 类图片结构和文案风险。")}</p>
           {providerConfig && (
             <p className="mt-1 text-sm text-slate-500">
               IMAGE_PROVIDER：{providerConfig.IMAGE_PROVIDER || providerConfig.selectedImageProvider} / BACKGROUND_PROVIDER：{providerConfig.BACKGROUND_PROVIDER || providerConfig.selectedBackgroundProvider}
@@ -395,18 +406,15 @@ export default function GeneratePage() {
         </div>
         <div>
           <PrimaryButton busy={busy} disabled={!imagePlans.length || !canGenerate} onClick={generate}>
-            <Images size={17} />
-            生成 mock 预览图
-          </PrimaryButton>
+            <Images size={17} />{t("生成 mock 预览图")}</PrimaryButton>
           <DisabledReason reason={!imagePlans.length || !canGenerate ? generateReason : ''} />
         </div>
       </div>
 
-      <Section title="模板验收摘要">
+      <Section title={t("模板验收摘要")}>
         <div className="space-y-4 text-sm">
           {templateAuditError && (
-            <div className="rounded border border-amber-200 bg-amber-50 p-3 text-amber-700">
-              模板验收报告加载失败：{templateAuditError}
+            <div className="rounded border border-amber-200 bg-amber-50 p-3 text-amber-700">{t("模板验收报告加载失败：")}{templateAuditError}
             </div>
           )}
           {templateAuditSections.emptyText ? (
@@ -417,16 +425,14 @@ export default function GeneratePage() {
             <>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <div className="font-semibold text-ink">模板验收摘要</div>
+                  <div className="font-semibold text-ink">{t("模板验收摘要")}</div>
                   <div className="mt-1 text-slate-500">{templateAuditSections.summaryText}</div>
                 </div>
                 <button
                   type="button"
                   onClick={downloadTemplateAudit}
                   className="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700"
-                >
-                  导出 JSON
-                </button>
+                >{t("导出 JSON")}</button>
               </div>
               <div className="rounded border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
                 {templateAuditExportNotice}
@@ -444,7 +450,7 @@ export default function GeneratePage() {
               <div className="rounded border border-slate-200 bg-white p-3">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="font-semibold text-slate-700">规则审计摘要</div>
+                    <div className="font-semibold text-slate-700">{t("规则审计摘要")}</div>
                     <div className="mt-1 text-slate-500">{templateAuditSections.ruleAuditText}</div>
                     {templateAuditSections.ruleAuditContextText && (
                       <div className="mt-1 text-amber-700">{templateAuditSections.ruleAuditContextText}</div>
@@ -468,18 +474,18 @@ export default function GeneratePage() {
 
                 <div className="mt-3 grid gap-3 lg:grid-cols-2">
                   <div className="rounded border border-slate-200 bg-slate-50 p-3 text-slate-600">
-                    <div className="font-semibold text-slate-700">文案风险</div>
+                    <div className="font-semibold text-slate-700">{t("文案风险")}</div>
                     <div className="mt-1">{templateAuditSections.ruleAuditCopyRiskText}</div>
                   </div>
                   <div className="rounded border border-slate-200 bg-slate-50 p-3 text-slate-600">
-                    <div className="font-semibold text-slate-700">Amazon 主图风险</div>
+                    <div className="font-semibold text-slate-700">{t("Amazon 主图风险")}</div>
                     <div className="mt-1">{templateAuditSections.ruleAuditAmazonText}</div>
                   </div>
                 </div>
 
                 {templateAuditSections.ruleAuditFields.length > 0 && (
                   <div className="mt-3">
-                    <div className="text-xs font-semibold text-slate-500">字段风险</div>
+                    <div className="text-xs font-semibold text-slate-500">{t("字段风险")}</div>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {templateAuditSections.ruleAuditFields.map((field, index) => (
                         <span key={`${field.fieldKey}-${field.reason}-${index}`} className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
@@ -492,7 +498,7 @@ export default function GeneratePage() {
 
                 {templateAuditSections.ruleAuditGroups.length > 0 && (
                   <div className="mt-3 space-y-2">
-                    <div className="text-xs font-semibold text-slate-500">按图片类型分组</div>
+                    <div className="text-xs font-semibold text-slate-500">{t("按图片类型分组")}</div>
                     {templateAuditSections.ruleAuditGroups.map((group) => (
                       <details key={`rule-group-${group.imageType}`} className="rounded border border-slate-200 bg-slate-50 p-3">
                         <summary className="cursor-pointer text-sm font-semibold text-slate-700">{group.summaryText}</summary>
@@ -504,7 +510,7 @@ export default function GeneratePage() {
                               <div className="mt-1">{issue.suggestion}</div>
                             </div>
                           )) : (
-                            <div className="rounded border border-emerald-200 bg-emerald-50 p-2 text-emerald-700">该图片类型暂无规则风险。</div>
+                            <div className="rounded border border-emerald-200 bg-emerald-50 p-2 text-emerald-700">{t("该图片类型暂无规则风险。")}</div>
                           )}
                         </div>
                       </details>
@@ -517,13 +523,13 @@ export default function GeneratePage() {
                 <table className="min-w-full divide-y divide-slate-200 text-xs">
                   <thead className="bg-slate-50 text-left text-slate-500">
                     <tr>
-                      <th className="px-3 py-2 font-medium">图片类型</th>
-                      <th className="px-3 py-2 font-medium">是否存在</th>
+                      <th className="px-3 py-2 font-medium">{t("图片类型")}</th>
+                      <th className="px-3 py-2 font-medium">{t("是否存在")}</th>
                       <th className="px-3 py-2 font-medium">templateName</th>
                       <th className="px-3 py-2 font-medium">layoutStyle</th>
                       <th className="px-3 py-2 font-medium">variantId</th>
                       <th className="px-3 py-2 font-medium">layoutSeed</th>
-                      <th className="px-3 py-2 font-medium">状态</th>
+                      <th className="px-3 py-2 font-medium">{t("状态")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
@@ -544,25 +550,25 @@ export default function GeneratePage() {
 
               <div className="grid gap-3 lg:grid-cols-2">
                 <div className="rounded border border-slate-200 bg-slate-50 p-3 text-slate-600">
-                  <div className="font-semibold text-slate-700">模板差异化</div>
+                  <div className="font-semibold text-slate-700">{t("模板差异化")}</div>
                   <div className="mt-1">{templateAuditSections.diversityText}</div>
                 </div>
                 <div className="rounded border border-slate-200 bg-slate-50 p-3 text-slate-600">
-                  <div className="font-semibold text-slate-700">Amazon 主图检查</div>
+                  <div className="font-semibold text-slate-700">{t("Amazon 主图检查")}</div>
                   <div className="mt-1">{templateAuditSections.amazonText}</div>
                 </div>
                 <div className="rounded border border-slate-200 bg-slate-50 p-3 text-slate-600">
-                  <div className="font-semibold text-slate-700">文案安全检查</div>
+                  <div className="font-semibold text-slate-700">{t("文案安全检查")}</div>
                   <div className="mt-1">{templateAuditSections.textSafetyText}</div>
                 </div>
                 <div className="rounded border border-slate-200 bg-slate-50 p-3 text-slate-600">
-                  <div className="font-semibold text-slate-700">字段安全检查</div>
+                  <div className="font-semibold text-slate-700">{t("字段安全检查")}</div>
                   <div className="mt-1">{templateAuditSections.fieldSafetyText}</div>
                 </div>
               </div>
 
               <div className="rounded border border-slate-200 bg-white p-3">
-                <div className="font-semibold text-slate-700">中文建议</div>
+                <div className="font-semibold text-slate-700">{t("中文建议")}</div>
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-slate-600">
                   {templateAuditSections.recommendations.map((item, index) => (
                     <li key={`${item}-${index}`}>{item}</li>
@@ -574,10 +580,10 @@ export default function GeneratePage() {
         </div>
       </Section>
 
-      <Section title="单 SKU 小样本生成真实生图">
+      <Section title={t("单 SKU 小样本生成真实生图")}>
         <div className="space-y-4 text-sm">
           <div className="rounded border border-blue-200 bg-blue-50 p-3 text-blue-800">
-            <div className="font-semibold text-ink">单 SKU 小样本真实生图 / 真实生图验收报告</div>
+            <div className="font-semibold text-ink">{t("单 SKU 小样本真实生图 / 真实生图验收报告")}</div>
             {singleImageGenerationNotice}
             <div className="mt-1 text-xs">{singleImageGenerationWarningText}</div>
           </div>
@@ -586,7 +592,7 @@ export default function GeneratePage() {
           )}
           <div className="grid gap-3 md:grid-cols-3">
             <label className="block">
-              <span className="mb-1 block text-xs font-semibold text-slate-500">生成图片类型</span>
+              <span className="mb-1 block text-xs font-semibold text-slate-500">{t("生成图片类型")}</span>
               <select value={singleImageType} onChange={(event) => setSingleImageType(event.target.value)} className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm">
                 {singleImageGenerationOptions.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -594,20 +600,18 @@ export default function GeneratePage() {
               </select>
             </label>
             <label className="block">
-              <span className="mb-1 block text-xs font-semibold text-slate-500">抠图 Provider</span>
+              <span className="mb-1 block text-xs font-semibold text-slate-500">{t("抠图 Provider")}</span>
               <select value={singleMattingProvider} onChange={(event) => setSingleMattingProvider(event.target.value)} className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm">
-                <option value="sharp">sharp 本地抠图</option>
-                <option value="image2">Image2 实验抠图</option>
+                <option value="sharp">{t("sharp 本地抠图")}</option>
+                <option value="image2">{t("Image2 实验抠图")}</option>
               </select>
             </label>
             <div className="flex items-end gap-2">
-              <div className="text-xs font-medium text-slate-500">导出真实生图验收报告</div>
+              <div className="text-xs font-medium text-slate-500">{t("导出真实生图验收报告")}</div>
               <button type="button" onClick={runSingleImageGeneration} disabled={!imagePlans.length || singleImageBusy} className="rounded bg-coral px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
-                {singleImageBusy ? '正在生成...' : '运行单图真实生成'}
+                {singleImageBusy ? t("正在生成...") : t("运行单图真实生成")}
               </button>
-              <button type="button" onClick={downloadSingleImageReport} disabled={!singleImageReport} className="rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-60">
-                下载生成结果 JSON
-              </button>
+              <button type="button" onClick={downloadSingleImageReport} disabled={!singleImageReport} className="rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-60">{t("下载生成结果 JSON")}</button>
             </div>
           </div>
           {singleImageSections.emptyText ? (
@@ -616,7 +620,7 @@ export default function GeneratePage() {
             <div className="space-y-3">
               <div>
                 <div className="font-semibold text-ink">{singleImageSections.title}</div>
-                <div className="mt-1 text-xs text-slate-500">manualChecklist 默认未检查，请人工打开图片后逐项确认。</div>
+                <div className="mt-1 text-xs text-slate-500">{t("manualChecklist 默认未检查，请人工打开图片后逐项确认。")}</div>
               </div>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
                 {singleImageSections.cards.map((card) => (
@@ -643,16 +647,14 @@ export default function GeneratePage() {
             </div>
           )}
           <div className="border-t border-slate-200 pt-4">
-            <div className="font-semibold text-ink">三张小样本对比</div>
-            <div className="mt-1 rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-              本次最多生成 3 张真实小样本，可能产生 API 成本。请确认后继续。
-            </div>
+            <div className="font-semibold text-ink">{t("三张小样本对比")}</div>
+            <div className="mt-1 rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">{t("本次最多生成 3 张真实小样本，可能产生 API 成本。请确认后继续。")}</div>
             <div className="mt-3 grid gap-3 lg:grid-cols-3">
               {threeSampleDrafts.map((sample, index) => (
                 <div key={sample.sampleId} className="rounded border border-slate-200 bg-slate-50 p-3">
                   <div className="mb-2 text-xs font-semibold text-slate-500">{sample.sampleId}</div>
                   <select value={sample.imageId} onChange={(event) => updateThreeSampleDraft(index, { imageId: event.target.value })} className="mb-2 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs">
-                    <option value="">自动选择样本图片</option>
+                    <option value="">{t("自动选择样本图片")}</option>
                     {sourceImages.slice(0, 8).map((source) => (
                       <option key={source.id} value={source.id}>{source.displayName || source.fileName || source.id}</option>
                     ))}
@@ -667,16 +669,14 @@ export default function GeneratePage() {
             </div>
             <label className="mt-3 flex items-start gap-2 text-xs text-slate-700">
               <input type="checkbox" checked={threeSampleConfirm} onChange={(event) => setThreeSampleConfirm(event.target.checked)} />
-              <span>我确认这是小样本测试，并接受可能产生的 API 成本。</span>
+              <span>{t("我确认这是小样本测试，并接受可能产生的 API 成本。")}</span>
             </label>
             {threeSampleError && <div className="mt-3 rounded border border-red-200 bg-red-50 p-3 text-red-700">{threeSampleError}</div>}
             <div className="mt-3 flex flex-wrap gap-2">
               <button type="button" onClick={runThreeSampleGeneration} disabled={!threeSampleRunState.canRun || threeSampleBusy} className="rounded bg-coral px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
-                {threeSampleBusy ? '正在生成三张小样本...' : '开始三张小样本对比'}
+                {threeSampleBusy ? t("正在生成三张小样本...") : t("开始三张小样本对比")}
               </button>
-              <button type="button" onClick={downloadThreeSampleReport} disabled={!threeSampleReport} className="rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-60">
-                导出三张小样本 JSON
-              </button>
+              <button type="button" onClick={downloadThreeSampleReport} disabled={!threeSampleReport} className="rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-60">{t("导出三张小样本 JSON")}</button>
               {!threeSampleRunState.canRun && <span className="self-center text-xs text-slate-500">{threeSampleRunState.reason}</span>}
             </div>
             {threeSampleSections.emptyText ? (
@@ -718,8 +718,8 @@ export default function GeneratePage() {
               <div key={`group-${entry.key}`} className="col-span-full rounded border border-slate-200 bg-white p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <div className="text-lg font-semibold text-ink">{targetDisplayLabel(entry.target)}</div>
-                    <div className="mt-1 text-sm text-slate-500">生成图片：{entry.images.length} 张 / mock：{summary.mock} / real：{summary.real} / fallback：{summary.fallback}</div>
+                    <div className="text-lg font-semibold text-ink">{targetDisplayLabel(entry.target, t)}</div>
+                    <div className="mt-1 text-sm text-slate-500">{t("生成图片：")}{entry.images.length}{" " + t("张 / mock：")}{summary.mock} / real：{summary.real} / fallback：{summary.fallback}</div>
                   </div>
                   <span className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-500">
                     targetId: {entry.target.id || entry.target.targetId || '-'}
@@ -751,11 +751,11 @@ export default function GeneratePage() {
           const compositeQuality = image.compositeQuality || preserveQuality.compositeQuality || {};
           const textLayout = image.textLayout || plan.textLayout;
           return (
-            <Section key={image.id} title={imageTitle(image)}>
+            <Section key={image.id} title={imageTitle(image, t)}>
               <button type="button" className="block w-full" onClick={() => setPreviewImage(image)}>
                 <img
                   src={`${ASSET_BASE}${image.previewUrl || image.url}`}
-                  alt={imageTitle(image)}
+                  alt={imageTitle(image, t)}
                   className="aspect-square w-full rounded border border-slate-200 object-cover transition hover:opacity-90"
                 />
               </button>
@@ -763,15 +763,15 @@ export default function GeneratePage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-slate-600">{image.status}</span>
                   <span className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-slate-600">{image.provider}/{image.model}</span>
-                  <span className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-slate-600">图片版本 {image.version || 1}</span>
-                  {plan.editedByUser && <span className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-blue-700">方案已编辑</span>}
-                  {regenerated && <span className="rounded border border-purple-200 bg-purple-50 px-2 py-1 text-purple-700">已重新生成</span>}
+                  <span className="rounded border border-slate-200 bg-slate-50 px-2 py-1 text-slate-600">{t("图片版本") + " "}{image.version || 1}</span>
+                  {plan.editedByUser && <span className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-blue-700">{t("方案已编辑")}</span>}
+                  {regenerated && <span className="rounded border border-purple-200 bg-purple-50 px-2 py-1 text-purple-700">{t("已重新生成")}</span>}
                   {image.isMockPreview && <span className="rounded border border-amber-200 bg-amber-50 px-2 py-1 text-amber-700">MOCK PREVIEW</span>}
                   {image.isRealGenerated && <span className="rounded border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-700">REAL GENERATED</span>}
-                  {image.fallbackToMock && <span className="rounded border border-red-200 bg-red-50 px-2 py-1 text-red-700">真实生成失败，已回退 mock</span>}
+                  {image.fallbackToMock && <span className="rounded border border-red-200 bg-red-50 px-2 py-1 text-red-700">{t("真实生成失败，已回退 mock")}</span>}
                   {requestSummary && (
                     <span className={`rounded border px-2 py-1 ${requestSummary.safeForRealGeneration ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}`}>
-                      {requestSummary.safeForRealGeneration ? '可接入真实生图' : '暂不建议真实生图'}
+                      {requestSummary.safeForRealGeneration ? t("可接入真实生图") : t("暂不建议真实生图")}
                     </span>
                   )}
                 </div>
@@ -783,65 +783,64 @@ export default function GeneratePage() {
                     <div className="mt-1">provider: {image.provider} / model: {image.model}</div>
                   )}
                   {image.fallbackToMock && image.realGenerationError && (
-                    <div className="mt-1">错误：{image.realGenerationError.code} / {image.realGenerationError.message}</div>
+                    <div className="mt-1">{t("错误：")}{image.realGenerationError.code} / {image.realGenerationError.message}</div>
                   )}
                 </div>
 
                 {image.type === 'lifestyle_image' && (
                   <div className="rounded border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-                    <div className="font-semibold text-slate-700">真实生成模式：{realModeLabel}</div>
+                    <div className="font-semibold text-slate-700">{t("真实生成模式：")}{realModeLabel}</div>
                     {realModeLabel === 'text_to_image' && (
-                      <div className="mt-1">当前为 text-to-image，不会严格保留原商品主体。</div>
+                      <div className="mt-1">{t("当前为 text-to-image，不会严格保留原商品主体。")}</div>
                     )}
                     {image.subjectCompositeUsed ? (
-                      <div className="mt-1 text-emerald-700">商品主体已保留，背景由 AI 生成。</div>
+                      <div className="mt-1 text-emerald-700">{t("商品主体已保留，背景由 AI 生成。")}</div>
                     ) : image.productReferenceUsed ? (
-                      <div className="mt-1 text-amber-700">已使用商品参考图，但商品主体可能被 AI 重绘。</div>
+                      <div className="mt-1 text-amber-700">{t("已使用商品参考图，但商品主体可能被 AI 重绘。")}</div>
                     ) : (
-                      <div className="mt-1 text-amber-700">未使用商品参考图。</div>
+                      <div className="mt-1 text-amber-700">{t("未使用商品参考图。")}</div>
                     )}
                     {image.productGeneratedByAI && (
-                      <div className="mt-1 text-amber-700">商品主体可能由 AI 重新绘制，请人工核对外观、颜色、接口和纹理。</div>
+                      <div className="mt-1 text-amber-700">{t("商品主体可能由 AI 重新绘制，请人工核对外观、颜色、接口和纹理。")}</div>
                     )}
                     {image.editFailed && (
-                      <div className="mt-1 text-red-700">edit 失败，已回退到 {image.fallbackMode || 'mock'}。</div>
+                      <div className="mt-1 text-red-700">{t("edit 失败，已回退到") + " "}{image.fallbackMode || 'mock'}。</div>
                     )}
                     {image.subjectCompositeUsed && (
                       <div className="mt-2 rounded border border-slate-200 bg-white p-2">
-                        <div>抠图 Provider：{image.mattingProvider || '-'}</div>
-                        <div>抠图方法：{image.mattingMethod || image.subjectExtractionMethod || '-'}</div>
-                        <div>背景类型：{image.backgroundType || '-'}</div>
-                        <div>边缘质量：{image.edgeQuality || '-'}</div>
-                        <div>抠图置信度：{image.mattingConfidence == null ? '-' : Math.round(image.mattingConfidence * 100) + '%'}</div>
+                        <div>{t("抠图 Provider：")}{image.mattingProvider || '-'}</div>
+                        <div>{t("抠图方法：")}{image.mattingMethod || image.subjectExtractionMethod || '-'}</div>
+                        <div>{t("背景类型：")}{image.backgroundType || '-'}</div>
+                        <div>{t("边缘质量：")}{image.edgeQuality || '-'}</div>
+                        <div>{t("抠图置信度：")}{image.mattingConfidence == null ? '-' : Math.round(image.mattingConfidence * 100) + '%'}</div>
                         {image.mattingWarnings?.length > 0 && (
-                          <div className="mt-1 text-amber-700">提示：{image.mattingWarnings.join('；')}</div>
+                          <div className="mt-1 text-amber-700">{t("提示：")}{image.mattingWarnings.join('；')}</div>
                         )}
                         {image.mattingFallbackToSharp && (
-                          <div className="mt-1 font-semibold text-amber-700">
-                            external matting 失败，已回退 sharp：{image.externalMattingError?.code || 'UNKNOWN'}
+                          <div className="mt-1 font-semibold text-amber-700">{t("external matting 失败，已回退 sharp：")}{image.externalMattingError?.code || 'UNKNOWN'}
                           </div>
                         )}
                         {image.subjectPngPath && (
-                          <div className="mt-1 break-all text-slate-500">主体 PNG：{image.subjectPngPath}</div>
+                          <div className="mt-1 break-all text-slate-500">{t("主体 PNG：")}{image.subjectPngPath}</div>
                         )}
                         {image.maskPath && (
                           <div className="mt-1 break-all text-slate-500">Mask：{image.maskPath}</div>
                         )}
                         {image.edgeQuality === 'poor' && (
-                          <div className="mt-1 font-semibold text-red-700">主体抠图质量较低，建议换一张白底主图或使用 image edit。</div>
+                          <div className="mt-1 font-semibold text-red-700">{t("主体抠图质量较低，建议换一张白底主图或使用 image edit。")}</div>
                         )}
                       </div>
                     )}
                     <div className={`mt-2 rounded border p-2 ${qualityClass(preserveQuality.qualityLevel)}`}>
-                      <div className="font-semibold">主体保留评估：{preserveQuality.qualityLevel || 'unknown'} / {preserveQuality.qualityScore ?? 0} 分</div>
-                      <div className="mt-1">当前策略：{generationStrategy.selectedMode || realModeLabel}</div>
-                      <div>推荐策略：{generationStrategy.recommendedMode || '-'}</div>
-                      <div>主体保真风险：{preserveQuality.subjectPreserveRisk || '-'}</div>
+                      <div className="font-semibold">{t("主体保留评估：")}{preserveQuality.qualityLevel || 'unknown'} / {preserveQuality.qualityScore ?? 0}{" " + t("分")}</div>
+                      <div className="mt-1">{t("当前策略：")}{generationStrategy.selectedMode || realModeLabel}</div>
+                      <div>{t("推荐策略：")}{generationStrategy.recommendedMode || '-'}</div>
+                      <div>{t("主体保真风险：")}{preserveQuality.subjectPreserveRisk || '-'}</div>
                       {preserveQuality.reasons?.length > 0 && (
-                        <div className="mt-1">原因：{preserveQuality.reasons.slice(0, 2).join('；')}</div>
+                        <div className="mt-1">{t("原因：")}{preserveQuality.reasons.slice(0, 2).join('；')}</div>
                       )}
                       {preserveQuality.suggestions?.length > 0 && (
-                        <div className="mt-1">建议：{preserveQuality.suggestions.slice(0, 2).join('；')}</div>
+                        <div className="mt-1">{t("建议：")}{preserveQuality.suggestions.slice(0, 2).join('；')}</div>
                       )}
                       {generationStrategy.userMessage && (
                         <div className="mt-1">{generationStrategy.userMessage}</div>
@@ -857,12 +856,12 @@ export default function GeneratePage() {
                           />
                         )}
                         <div>
-                          <div className="font-medium text-slate-700">商品参考图：{displayReference.displayName}</div>
-                          <div>选择方式：{referenceOverride ? '用户手动选择' : (productReference?.reason || productReference?.role || '自动选择')}</div>
-                          {referenceOverride && <div className="text-amber-700">参考图已变更，建议重新生成此图。</div>}
+                          <div className="font-medium text-slate-700">{t("商品参考图：")}{displayReference.displayName}</div>
+                          <div>{t("选择方式：")}{referenceOverride ? t("用户手动选择") : (productReference?.reason || productReference?.role || t("自动选择"))}</div>
+                          {referenceOverride && <div className="text-amber-700">{t("参考图已变更，建议重新生成此图。")}</div>}
                           <div className="hidden">
-                          <div className="font-medium text-slate-700">参考图：{productReference.displayName}</div>
-                          <div>选择原因：{productReference.reason || productReference.role || '-'}</div>
+                          <div className="font-medium text-slate-700">{t("参考图：")}{productReference.displayName}</div>
+                          <div>{t("选择原因：")}{productReference.reason || productReference.role || '-'}</div>
                           </div>
                         </div>
                       </div>
@@ -873,16 +872,14 @@ export default function GeneratePage() {
                           type="button"
                           onClick={() => setReferencePickerPlanId(referencePickerPlanId === image.planId ? '' : image.planId)}
                           className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700"
-                        >
-                          更换参考图
-                        </button>
+                        >{t("更换参考图")}</button>
                         <button
                           type="button"
                           onClick={() => previewMatting(image.planId, selectedSourceId)}
                           disabled={previewingMattingPlanId === image.planId}
                           className="rounded border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 disabled:opacity-60"
                         >
-                          {previewingMattingPlanId === image.planId ? '正在预览抠图...' : '预览抠图'}
+                          {previewingMattingPlanId === image.planId ? t("正在预览抠图...") : t("预览抠图")}
                         </button>
                       </div>
                       {referencePickerPlanId === image.planId && (
@@ -902,16 +899,16 @@ export default function GeneratePage() {
                       )}
                       {mattingPreview && (
                         <div className="rounded border border-slate-200 bg-white p-2">
-                          <div className="font-semibold text-slate-700">抠图预览：{mattingPreview.mattingProvider} / {mattingPreview.edgeQuality} / {Math.round((mattingPreview.confidence || 0) * 100)}%</div>
-                          <div className="mt-1">背景类型：{mattingPreview.backgroundType}</div>
+                          <div className="font-semibold text-slate-700">{t("抠图预览：")}{mattingPreview.mattingProvider} / {mattingPreview.edgeQuality} / {Math.round((mattingPreview.confidence || 0) * 100)}%</div>
+                          <div className="mt-1">{t("背景类型：")}{mattingPreview.backgroundType}</div>
                           {mattingPreview.mattingFallbackToSharp && (
-                            <div className="mt-1 text-amber-700">第三方抠图失败，已回退 sharp：{mattingPreview.externalMattingError?.code || 'UNKNOWN'}</div>
+                            <div className="mt-1 text-amber-700">{t("第三方抠图失败，已回退 sharp：")}{mattingPreview.externalMattingError?.code || 'UNKNOWN'}</div>
                           )}
                           {mattingPreview.warnings?.length > 0 && (
                             <div className="mt-1 text-amber-700">{mattingPreview.warnings.join('；')}</div>
                           )}
                           {mattingPreview.edgeQuality === 'poor' && (
-                            <div className="mt-1 font-semibold text-red-700">建议换白底图或更清晰商品图。</div>
+                            <div className="mt-1 font-semibold text-red-700">{t("建议换白底图或更清晰商品图。")}</div>
                           )}
                           <div className="mt-2 flex gap-2">
                             {mattingPreview.subjectPng?.previewUrl && (
@@ -924,7 +921,7 @@ export default function GeneratePage() {
                         </div>
                       )}
                       <details className="rounded border border-slate-200 bg-white p-3">
-                        <summary className="cursor-pointer font-semibold text-slate-700">主体合成设置</summary>
+                        <summary className="cursor-pointer font-semibold text-slate-700">{t("主体合成设置")}</summary>
                         <div className="mt-3 space-y-3">
                           <div className="flex flex-wrap gap-2">
                             {compositePresets.map((preset) => (
@@ -934,83 +931,81 @@ export default function GeneratePage() {
                                 onClick={() => updateCompositeDraft(image.planId, preset.settings)}
                                 className="rounded border border-slate-300 bg-slate-50 px-2 py-1 text-[11px] font-medium text-slate-700"
                               >
-                                {preset.label}
+                                {t(preset.label)}
                               </button>
                             ))}
                           </div>
 
                           <label className="block">
-                            <span className="text-xs font-medium text-slate-600">主体位置</span>
+                            <span className="text-xs font-medium text-slate-600">{t("主体位置")}</span>
                             <select
                               value={compositeSettings.placement}
                               onChange={(event) => updateCompositeDraft(image.planId, { placement: event.target.value })}
                               className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs"
                             >
-                              <option value="center">居中</option>
-                              <option value="bottom_center">底部居中</option>
-                              <option value="left">左侧</option>
-                              <option value="right">右侧</option>
-                              <option value="custom">自定义</option>
+                              <option value="center">{t("居中")}</option>
+                              <option value="bottom_center">{t("底部居中")}</option>
+                              <option value="left">{t("左侧")}</option>
+                              <option value="right">{t("右侧")}</option>
+                              <option value="custom">{t("自定义")}</option>
                             </select>
                           </label>
 
                           <div className="grid gap-3 sm:grid-cols-2">
                             <label className="block">
-                              <span className="text-xs font-medium text-slate-600">主体大小：{Math.round(compositeSettings.scale * 100)}%</span>
+                              <span className="text-xs font-medium text-slate-600">{t("主体大小：")}{Math.round(compositeSettings.scale * 100)}%</span>
                               <input type="range" min="0.4" max="1" step="0.01" value={compositeSettings.scale} onChange={(event) => updateCompositeDraft(image.planId, { scale: event.target.value })} className="mt-1 w-full" />
                             </label>
                             <label className="block">
-                              <span className="text-xs font-medium text-slate-600">边缘柔化：{compositeSettings.edgeFeather}</span>
+                              <span className="text-xs font-medium text-slate-600">{t("边缘柔化：")}{compositeSettings.edgeFeather}</span>
                               <input type="range" min="0" max="8" step="0.5" value={compositeSettings.edgeFeather} onChange={(event) => updateCompositeDraft(image.planId, { edgeFeather: event.target.value })} className="mt-1 w-full" />
                             </label>
                             <label className="block">
-                              <span className="text-xs font-medium text-slate-600">水平偏移：{compositeSettings.offsetX}px</span>
+                              <span className="text-xs font-medium text-slate-600">{t("水平偏移：")}{compositeSettings.offsetX}px</span>
                               <input type="range" min="-300" max="300" step="10" value={compositeSettings.offsetX} onChange={(event) => updateCompositeDraft(image.planId, { offsetX: event.target.value })} className="mt-1 w-full" />
                             </label>
                             <label className="block">
-                              <span className="text-xs font-medium text-slate-600">垂直偏移：{compositeSettings.offsetY}px</span>
+                              <span className="text-xs font-medium text-slate-600">{t("垂直偏移：")}{compositeSettings.offsetY}px</span>
                               <input type="range" min="-300" max="300" step="10" value={compositeSettings.offsetY} onChange={(event) => updateCompositeDraft(image.planId, { offsetY: event.target.value })} className="mt-1 w-full" />
                             </label>
                           </div>
 
                           <div className="grid gap-3 sm:grid-cols-2">
                             <label className="flex items-center gap-2 text-xs font-medium text-slate-600">
-                              <input type="checkbox" checked={Boolean(compositeSettings.shadowEnabled)} onChange={(event) => updateCompositeDraft(image.planId, { shadowEnabled: event.target.checked })} />
-                              开启自然阴影
-                            </label>
+                              <input type="checkbox" checked={Boolean(compositeSettings.shadowEnabled)} onChange={(event) => updateCompositeDraft(image.planId, { shadowEnabled: event.target.checked })} />{t("开启自然阴影")}</label>
                             <label className="block">
-                              <span className="text-xs font-medium text-slate-600">阴影类型</span>
+                              <span className="text-xs font-medium text-slate-600">{t("阴影类型")}</span>
                               <select
                                 value={compositeSettings.shadowType}
                                 onChange={(event) => updateCompositeDraft(image.planId, { shadowType: event.target.value })}
                                 className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs"
                               >
-                                <option value="soft_contact">柔和接触阴影</option>
-                                <option value="drop_shadow">投影阴影</option>
-                                <option value="none">无阴影</option>
+                                <option value="soft_contact">{t("柔和接触阴影")}</option>
+                                <option value="drop_shadow">{t("投影阴影")}</option>
+                                <option value="none">{t("无阴影")}</option>
                               </select>
                             </label>
                             <label className="block">
-                              <span className="text-xs font-medium text-slate-600">阴影强度：{Math.round(compositeSettings.shadowOpacity * 100)}%</span>
+                              <span className="text-xs font-medium text-slate-600">{t("阴影强度：")}{Math.round(compositeSettings.shadowOpacity * 100)}%</span>
                               <input type="range" min="0" max="0.8" step="0.02" value={compositeSettings.shadowOpacity} onChange={(event) => updateCompositeDraft(image.planId, { shadowOpacity: event.target.value })} className="mt-1 w-full" />
                             </label>
                             <label className="block">
-                              <span className="text-xs font-medium text-slate-600">色彩融合</span>
+                              <span className="text-xs font-medium text-slate-600">{t("色彩融合")}</span>
                               <select
                                 value={compositeSettings.colorMatch}
                                 onChange={(event) => updateCompositeDraft(image.planId, { colorMatch: event.target.value })}
                                 className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs"
                               >
-                                <option value="none">不调整</option>
-                                <option value="basic">基础亮度匹配</option>
+                                <option value="none">{t("不调整")}</option>
+                                <option value="basic">{t("基础亮度匹配")}</option>
                               </select>
                             </label>
                           </div>
 
                           {compositeQuality.level && (
                             <div className={`rounded border p-2 text-xs ${qualityClass(compositeQuality.level)}`}>
-                              <div className="font-semibold">合成质量：{compositeQuality.level}</div>
-                              <div>位置风险：{compositeQuality.subjectPlacementRisk || '-'} / 边缘风险：{compositeQuality.edgeBlendRisk || '-'} / 阴影风险：{compositeQuality.shadowRisk || '-'}</div>
+                              <div className="font-semibold">{t("合成质量：")}{compositeQuality.level}</div>
+                              <div>{t("位置风险：")}{compositeQuality.subjectPlacementRisk || '-'}{" " + t("/ 边缘风险：")}{compositeQuality.edgeBlendRisk || '-'}{" " + t("/ 阴影风险：")}{compositeQuality.shadowRisk || '-'}</div>
                               {compositeQuality.suggestions?.length > 0 && <div className="mt-1">{compositeQuality.suggestions.slice(0, 2).join('；')}</div>}
                             </div>
                           )}
@@ -1022,16 +1017,14 @@ export default function GeneratePage() {
                               disabled={compositeSavingPlanId === image.planId}
                               className="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 disabled:opacity-60"
                             >
-                              {compositeSavingPlanId === image.planId ? '正在保存...' : '保存合成设置'}
+                              {compositeSavingPlanId === image.planId ? t("正在保存...") : t("保存合成设置")}
                             </button>
                             <button
                               type="button"
                               onClick={() => regenerate(image.planId, 'real_background', 'subject_composite', { compositeSettings })}
                               disabled={regeneratingPlanId === image.planId}
                               className="rounded bg-coral px-3 py-2 text-xs font-medium text-white disabled:opacity-60"
-                            >
-                              使用当前合成设置重新生成
-                            </button>
+                            >{t("使用当前合成设置重新生成")}</button>
                           </div>
                         </div>
                       </details>
@@ -1054,14 +1047,12 @@ export default function GeneratePage() {
                 )}
 
                 {image.realGenerationSkipped && (
-                  <div className="rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600">
-                    当前类型暂不支持真实生图，继续使用 mock：{image.skipReason}
+                  <div className="rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-600">{t("当前类型暂不支持真实生图，继续使用 mock：")}{image.skipReason}
                   </div>
                 )}
 
                 {image.realGenerationError && (
-                  <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">
-                    真实生成错误：{image.realGenerationError.code} / {image.realGenerationError.message}
+                  <div className="rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700">{t("真实生成错误：")}{image.realGenerationError.code} / {image.realGenerationError.message}
                   </div>
                 )}
 
@@ -1077,29 +1068,24 @@ export default function GeneratePage() {
 
                 {textLayout && (
                   <details open className="rounded border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-                    <summary className="cursor-pointer font-semibold text-slate-700">程序化文字排版</summary>
+                    <summary className="cursor-pointer font-semibold text-slate-700">{t("程序化文字排版")}</summary>
                     <div className="mt-2 grid grid-cols-3 gap-2">
-                      <div className="rounded bg-white p-2">文字：{textLayout.textElements?.length || 0}</div>
-                      <div className="rounded bg-white p-2">图标：{textLayout.iconElements?.length || 0}</div>
-                      <div className="rounded bg-white p-2">线条：{textLayout.lineElements?.length || 0}</div>
+                      <div className="rounded bg-white p-2">{t("文字：")}{textLayout.textElements?.length || 0}</div>
+                      <div className="rounded bg-white p-2">{t("图标：")}{textLayout.iconElements?.length || 0}</div>
+                      <div className="rounded bg-white p-2">{t("线条：")}{textLayout.lineElements?.length || 0}</div>
                     </div>
                     {image.renderedBy === 'programmatic_text_layout' && (
-                      <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 p-2 text-emerald-700">
-                        已使用程序化文字排版生成，图片文字不依赖 AI 绘制。
-                      </div>
+                      <div className="mt-2 rounded border border-emerald-200 bg-emerald-50 p-2 text-emerald-700">{t("已使用程序化文字排版生成，图片文字不依赖 AI 绘制。")}</div>
                     )}
-                    <div className="mt-2 rounded border border-slate-200 bg-white p-2">
-                      排版来源：{(image.layoutSource || textLayout.layoutSource) === 'user_override' ? '用户编辑布局' : '自动布局'}
-                      {(image.layoutEditedByUser || textLayout.layoutEditedByUser) && <span className="ml-2 text-blue-700">已手动调整</span>}
+                    <div className="mt-2 rounded border border-slate-200 bg-white p-2">{t("排版来源：")}{(image.layoutSource || textLayout.layoutSource) === 'user_override' ? t("用户编辑布局") : t("自动布局")}
+                      {(image.layoutEditedByUser || textLayout.layoutEditedByUser) && <span className="ml-2 text-blue-700">{t("已手动调整")}</span>}
                     </div>
                     {textLayout.blockingIssues?.length > 0 && (
-                      <div className="mt-2 rounded border border-red-200 bg-red-50 p-2 text-red-700">
-                        需要补充信息：{textLayout.blockingIssues.map((item) => item.message || item.code).join('；')}
+                      <div className="mt-2 rounded border border-red-200 bg-red-50 p-2 text-red-700">{t("需要补充信息：")}{textLayout.blockingIssues.map((item) => item.message || item.code).join('；')}
                       </div>
                     )}
                     {textLayout.warnings?.length > 0 && (
-                      <div className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-amber-700">
-                        排版警告：{textLayout.warnings.map((item) => item.message || item.code).slice(0, 3).join('；')}
+                      <div className="mt-2 rounded border border-amber-200 bg-amber-50 p-2 text-amber-700">{t("排版警告：")}{textLayout.warnings.map((item) => item.message || item.code).slice(0, 3).join('；')}
                       </div>
                     )}
                     <div className="mt-3 rounded border border-slate-200 bg-white p-3">
@@ -1118,9 +1104,9 @@ export default function GeneratePage() {
                 )}
 
                 <details>
-                  <summary className="cursor-pointer text-sm font-medium text-slate-700">Prompt 预览</summary>
+                  <summary className="cursor-pointer text-sm font-medium text-slate-700">{t("Prompt 预览")}</summary>
                   <div className="mt-2 max-h-36 overflow-auto rounded border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-600">
-                    {promptPreview(image, plan)}
+                    {promptPreview(image, plan, t)}
                   </div>
                 </details>
 
@@ -1136,7 +1122,7 @@ export default function GeneratePage() {
                   disabled={regeneratingPlanId === image.planId}
                   className="w-full rounded bg-ink px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {regeneratingPlanId === image.planId ? '正在生成...' : '生成 mock 预览'}
+                  {regeneratingPlanId === image.planId ? t("正在生成...") : t("生成 mock 预览")}
                 </button>
                 {canTryRealBackground ? (
                   <div className="grid gap-2">
@@ -1146,28 +1132,24 @@ export default function GeneratePage() {
                     disabled={regeneratingPlanId === image.planId}
                     className="w-full rounded bg-coral px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {regeneratingPlanId === image.planId ? '正在尝试真实背景生成...' : '尝试真实背景生成'}
+                    {regeneratingPlanId === image.planId ? t("正在尝试真实背景生成...") : t("尝试真实背景生成")}
                   </button>
                   <button
                     type="button"
                     onClick={() => regenerate(image.planId, 'real_background', 'image_edit')}
                     disabled={regeneratingPlanId === image.planId}
                     className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    使用 image edit 生成
-                  </button>
+                  >{t("使用 image edit 生成")}</button>
                   <button
                     type="button"
                     onClick={() => regenerate(image.planId, 'real_background', 'text_to_image')}
                     disabled={regeneratingPlanId === image.planId}
                     className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    使用纯场景生成
-                  </button>
+                  >{t("使用纯场景生成")}</button>
                   </div>
                 ) : (
                   <div className="rounded border border-slate-200 bg-slate-50 p-2 text-xs text-slate-500">
-                    {image.type === 'lifestyle_image' ? '该图暂不满足真实背景生成安全条件。' : '当前类型暂不支持真实生图，继续使用 mock。'}
+                    {image.type === 'lifestyle_image' ? t("该图暂不满足真实背景生成安全条件。") : t("当前类型暂不支持真实生图，继续使用 mock。")}
                   </div>
                 )}
               </div>
@@ -1177,7 +1159,7 @@ export default function GeneratePage() {
       </div>
 
       {generatedImages.length > 0 && (
-        <PrimaryButton onClick={() => navigate(`/tasks/${taskId}/review`)}>继续合规审核</PrimaryButton>
+        <PrimaryButton onClick={() => navigate(`/tasks/${taskId}/review`)}>{t("继续合规审核")}</PrimaryButton>
       )}
 
       {previewImage && (
@@ -1187,13 +1169,13 @@ export default function GeneratePage() {
               type="button"
               onClick={() => setPreviewImage(null)}
               className="absolute right-3 top-3 rounded-full bg-white p-2 text-slate-700 shadow"
-              aria-label="关闭预览"
+              aria-label={t("关闭预览")}
             >
               <X size={20} />
             </button>
             <img
               src={`${ASSET_BASE}${previewImage.previewUrl || previewImage.url}`}
-              alt={imageTitle(previewImage)}
+              alt={imageTitle(previewImage, t)}
               className="max-h-[88vh] max-w-full rounded bg-white object-contain"
             />
           </div>

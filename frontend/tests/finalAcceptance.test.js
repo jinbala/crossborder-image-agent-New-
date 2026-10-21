@@ -309,7 +309,7 @@ test('FinalAcceptancePage route nav API and safe copy are wired', () => {
   assert.match(pageSource, /addFinalAcceptanceIssue/);
   assert.match(pageSource, /updateFinalAcceptanceIssue/);
   assert.match(pageSource, /deleteFinalAcceptanceIssue/);
-  assert.match(pageSource, /不写入数据库|issue log is kept/);
+  assert.ok(pageSource.includes('t(finalAcceptanceIssueNotice)'));
   assert.match(pageSource, /瀵煎嚭 JSON|JSON/);
   assert.match(pageSource, /瀵煎嚭 CSV|CSV/);
   assert.match(pageSource, /妯″潡楠屾敹琛?|moduleRows/);

@@ -49,12 +49,12 @@ export function canRunAction(status, action) {
   return ACTION_ALLOWED_STATUSES[action]?.includes(status) || false;
 }
 
-export function actionDisabledReason(status, action) {
+export function actionDisabledReason(status, action, t = (text, values = {}) => text.replace(/\{(\w+)\}/g, (_, key) => values[key] ?? `{${key}}`)) {
   if (canRunAction(status, action)) return '';
   const allowed = ACTION_ALLOWED_STATUSES[action] || [];
-  const currentLabel = statusLabels[status] || status || '未知状态';
-  const allowedLabels = allowed.map((item) => statusLabels[item] || item).join(' 或 ');
-  return `当前状态为“${currentLabel}”，需要状态为“${allowedLabels}”时才能操作。`;
+  const currentLabel = statusLabels[status] ? t(statusLabels[status]) : status || t('未知状态');
+  const allowedLabels = allowed.map((item) => t(statusLabels[item] || item)).join(t(' 或 '));
+  return t('当前状态为“{current}”，需要状态为“{allowed}”时才能操作。', { current: currentLabel, allowed: allowedLabels });
 }
 
 export function friendlyStatusError(message) {

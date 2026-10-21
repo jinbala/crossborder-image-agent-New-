@@ -1,14 +1,40 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { nanoid } from 'nanoid';
-import { getTask, paths } from './db.js';
+import { createHash } from 'node:crypto';
+import sharp from 'sharp';
+import { getTask, updateTask, paths } from './db.js';
 import { evaluateMattingQuality } from './mattingQualityService.js';
-import { ExternalMattingProvider, Image2MattingProvider, SharpMattingProvider } from '../providers/matting/index.js';
+import { ExternalMattingProvider, Image2MattingProvider, RembgMattingProvider, SharpMattingProvider } from '../providers/matting/index.js';
+import { rembgEnvironment } from '../providers/matting/rembgMattingProvider.js';
 
 const DEFAULT_TIMEOUT_MS = 60000;
 
+export async function adoptMatting(input = {}) {
+  if (input.confirm !== true) throw Object.assign(new Error('请确认采用此抠图结果'), { statusCode: 400 });
+  const task = await getTask(input.taskId);
+  if (!task) throw Object.assign(new Error('任务不存在'), { statusCode: 404 });
+  if (!/^[A-Za-z0-9_-]+$/.test(task.id)) throw Object.assign(new Error('任务 ID 无效'), { statusCode: 400 });
+  const sourceImage = (task.sourceImages || [task.originalImage]).find((image) => image?.id === input.imageId);
+  if (!sourceImage) throw Object.assign(new Error('原图不属于此任务'), { statusCode: 400 });
+  const expected = path.join(paths.outputDir, task.id, 'matting-test');
+  const url = String(input.url || '');
+  if (!url.startsWith('/outputs/') || url.includes('?') || url.includes('#')) throw Object.assign(new Error('仅可采用本任务已生成的本地抠图结果'), { statusCode: 400 });
+  const candidate = path.resolve(paths.rootDir, `.${url}`);
+  const relative = path.relative(expected, candidate);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || path.dirname(relative) !== '.') throw Object.assign(new Error('抠图结果不属于此任务'), { statusCode: 400 });
+  const actual = await fs.realpath(candidate);
+  if (actual !== candidate) throw Object.assign(new Error('不允许采用链接文件'), { statusCode: 400 });
+  const data = await fs.readFile(actual), metadata = await sharp(data).metadata();
+  if (metadata.format !== 'png') throw Object.assign(new Error('请选择生成的 PNG 结果'), { statusCode: 400 });
+  const provider = ['sharp', 'rembg', 'external', 'image2'].includes(input.provider) ? input.provider : 'unknown';
+  const selection = { sourceImageId: sourceImage.id, provider, previewUrl: url, width: metadata.width, height: metadata.height, sha256: createHash('sha256').update(data).digest('hex'), adoptedAt: new Date().toISOString(), originalPreserved: true };
+  await updateTask(task.id, () => ({ mattingSelection: selection }));
+  return { selection, message: '已记录采用项，原图与其他 Provider 结果均保留。可在工作室将采用图作为输入继续制作。' };
+}
+
 function normalizeProvider(provider) {
-  return ['sharp', 'external', 'image2', 'auto'].includes(String(provider || '').toLowerCase())
+  return ['sharp', 'rembg', 'external', 'image2', 'auto'].includes(String(provider || '').toLowerCase())
     ? String(provider).toLowerCase()
     : 'sharp';
 }
@@ -71,6 +97,7 @@ function findSourceImage(task, imageId) {
 function createProviders(env, providers = {}) {
   return {
     sharp: providers.sharp || new SharpMattingProvider(),
+    rembg: providers.rembg || new RembgMattingProvider(),
     external: providers.external || new ExternalMattingProvider({
       apiKey: externalKey(env),
       baseURL: externalUrl(env),
@@ -103,16 +130,30 @@ export function getMattingConfig(env = process.env) {
   const currentProvider = normalizeProvider(env.MATTING_PROVIDER || 'sharp');
   const configured = externalConfigured(env);
   const image2Available = image2Configured(env);
+  const environment = rembgEnvironment(env);
+  const localAiAvailable = environment.ready;
   return {
     currentProvider,
+    generationDestination: { provider: 'openai', origin: (() => { try { const value = new URL(env.OPENAI_BASE_URL || 'https://api.openai.com/v1'); return ['http:', 'https:'].includes(value.protocol) ? value.origin : null; } catch { return null; } })(), cost: '按服务商计费，当前未核定单价' },
+    dataDestinations: [
+      ...(configured ? [{ provider: 'external', origin: (() => { try { return new URL(externalUrl(env)).origin; } catch { return '配置地址无效'; } })(), cost: '按服务商计费，当前未核定单价' }] : []),
+      ...(image2Available ? [{ provider: 'image2', origin: (() => { try { return new URL(env.OPENAI_BASE_URL || 'https://api.openai.com/v1').origin; } catch { return '配置地址无效'; } })(), cost: '按服务商计费，当前未核定单价' }] : [])
+    ],
     externalConfigured: configured,
     image2Available,
+    localAiAvailable,
+    localAiProvider: 'rembg',
+    localAiEnvironment: { installed: environment.installed, modelPresent: environment.modelPresent, licenseAccepted: environment.licenseAccepted, ready: environment.ready, reason: environment.reason },
+    localAiModel: env.REMBG_MODEL || 'u2net',
+    localAiNotice: localAiAvailable
+      ? '已检测到 rembg，本地推理不上传图片；模型输出仍需人工复核，模型权利以你安装的权重许可为准。'
+      : `${environment.reason}。可先用 setup-rembg.ps1 -DependenciesOnly 安装依赖，模型许可必须另行确认。`,
     externalProviders: image2Available ? ['sharp', 'image2'] : ['sharp'],
     image2ModeLabel: '实验性抠图',
     costNotice: image2Available
       ? 'Image2 抠图测试可能产生 API 成本，仅在你点击对应按钮时才会调用。'
       : 'Image2 未配置，不会产生第三方 API 成本。',
-    availableProviders: ['sharp', 'external', 'image2', 'auto'],
+    availableProviders: ['sharp', 'rembg', 'external', 'image2', 'auto'],
     defaultProvider: 'sharp',
     timeoutMs: timeoutMs(env),
     warning: image2Available
@@ -191,6 +232,20 @@ export async function runMatting(input = {}, deps = {}) {
     });
   }
 
+  if (providerName === 'rembg' && !config.localAiAvailable) {
+    const fallback = await providers.sharp.extractSubject({ task, sourceImage });
+    return normalizeResult({
+      task,
+      sourceImage,
+      providerResult: fallback,
+      requestedProvider: 'rembg',
+      providerUsed: fallback.provider || 'sharp',
+      fallbackUsed: true,
+      fallbackReason: `${config.localAiEnvironment.reason}，已改用 Sharp，不会自动安装或下载模型。`,
+      outputRoot
+    });
+  }
+
   if (providerName === 'image2' && !config.image2Available) {
     const fallback = await providers.sharp.extractSubject({ task, sourceImage });
     return normalizeResult({
@@ -206,7 +261,7 @@ export async function runMatting(input = {}, deps = {}) {
   }
 
   const primary = await providers[providerName].extractSubject({ task, sourceImage });
-  if ((providerName === 'external' || providerName === 'image2') && primary.status !== 'success') {
+  if ((providerName === 'external' || providerName === 'image2' || providerName === 'rembg') && primary.status !== 'success') {
     const fallback = await providers.sharp.extractSubject({ task, sourceImage });
     if (fallback.status === 'success') {
       return normalizeResult({
@@ -216,7 +271,7 @@ export async function runMatting(input = {}, deps = {}) {
         requestedProvider: providerName,
         providerUsed: fallback.provider || 'sharp',
         fallbackUsed: true,
-        fallbackReason: `${providerName === 'image2' ? 'Image2 抠图失败' : '第三方抠图失败'}，已 fallback 到 sharp。${primary.error?.message || ''}`,
+        fallbackReason: `${providerName === 'image2' ? 'Image2 抠图失败' : providerName === 'rembg' ? '本地 AI 抠图失败' : '第三方抠图失败'}，已 fallback 到 sharp。${primary.error?.message || ''}`,
         outputRoot
       });
     }

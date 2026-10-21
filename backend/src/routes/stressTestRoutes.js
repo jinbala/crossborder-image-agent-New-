@@ -1,5 +1,6 @@
 import express from 'express';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { requirePaidConfirmation } from '../services/paidOperationPolicy.js';
 import {
   getStressTestConfig,
   getStressTestReport,
@@ -14,6 +15,7 @@ export function createStressTestRouter(serviceOptions = {}) {
   }));
 
   router.post('/run', asyncHandler(async (req, res) => {
+    requirePaidConfirmation(req.body, req.body?.mode === 'realVisionMockGenerate');
     const report = await runStressTest(req.body || {}, serviceOptions);
     res.status(201).json(report);
   }));

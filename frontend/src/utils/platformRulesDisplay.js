@@ -30,20 +30,20 @@ export function sanitizeRulesDisplay(value) {
     .replace(/\bnode_modules\b/gi, '[已隐藏依赖目录]');
 }
 
-export function fieldDisplayName(field) {
-  return FIELD_LABELS[field] || field;
+export function fieldDisplayName(field, t = (text) => text) {
+  return FIELD_LABELS[field] ? t(FIELD_LABELS[field]) : field;
 }
 
-export function ruleListText(items = []) {
+export function ruleListText(items = [], t = (text) => text) {
   const safeItems = Array.isArray(items) ? items.filter(Boolean) : [];
-  return safeItems.length ? safeItems.join('、') : '暂无';
+  return safeItems.length ? safeItems.join('、') : t('暂无');
 }
 
 export function platformRulesEmptyText() {
   return '暂无该平台或类目的规则配置，请检查平台和类目选择。';
 }
 
-function mainImageSummary(rules = {}) {
+function mainImageSummary(rules = {}, t) {
   const parts = [];
   if (rules.background === 'pure_white') parts.push('白底');
   else if (rules.background) parts.push(`背景：${rules.background}`);
@@ -52,10 +52,10 @@ function mainImageSummary(rules = {}) {
   if (rules.priceAllowed === false) parts.push('不允许价格');
   if (rules.promotionAllowed === false) parts.push('不允许促销');
   if (rules.productCentered) parts.push('产品居中');
-  return parts.length ? parts.join('，') : '暂无主图规则摘要';
+  return parts.length ? parts.map((part) => part.startsWith('背景：') ? `${t('背景：')}${rules.background}` : t(part)).join(' / ') : t('暂无主图规则摘要');
 }
 
-function secondaryImageSummary(rules = {}) {
+function secondaryImageSummary(rules = {}, t) {
   const parts = [];
   if (rules.textAllowed) parts.push('允许英文卖点');
   if (rules.chineseAllowed === false) parts.push('不允许中文');
@@ -66,13 +66,13 @@ function secondaryImageSummary(rules = {}) {
   if (rules.unconfirmedCapacityAllowed === false) parts.push('未确认容量不可写入文案');
   if (rules.unconfirmedSpeedAllowed === false) parts.push('未确认速度不可写入文案');
   if (rules.absoluteClaimsAllowed === false) parts.push('不允许绝对化词');
-  return parts.length ? parts.join('，') : '暂无辅图规则摘要';
+  return parts.length ? parts.map((part) => t(part)).join(' / ') : t('暂无辅图规则摘要');
 }
 
-export function buildRulesSummary(effectiveRules) {
+export function buildRulesSummary(effectiveRules, t = (text) => text) {
   if (!effectiveRules) {
     return {
-      emptyText: platformRulesEmptyText(),
+      emptyText: t(platformRulesEmptyText()),
       platformText: '',
       categoryText: '',
       mainImageText: '',
@@ -85,14 +85,14 @@ export function buildRulesSummary(effectiveRules) {
   }
 
   const safeRules = sanitizeRulesDisplay(effectiveRules);
-  const highRiskFields = (safeRules.effectiveHighRiskFields || []).map((field) => `${fieldDisplayName(field)} ${field}`);
+  const highRiskFields = (safeRules.effectiveHighRiskFields || []).map((field) => `${fieldDisplayName(field, t)} ${field}`);
 
   return {
     emptyText: '',
-    platformText: safeRules.platformName || safeRules.platformId || '未知平台',
-    categoryText: safeRules.categoryName || safeRules.categoryId || '未知类目',
-    mainImageText: mainImageSummary(safeRules.effectiveMainImageRules),
-    secondaryImageText: secondaryImageSummary(safeRules.effectiveSecondaryImageRules),
+    platformText: safeRules.platformName || safeRules.platformId || t('未知平台'),
+    categoryText: safeRules.categoryName || safeRules.categoryId || t('未知类目'),
+    mainImageText: mainImageSummary(safeRules.effectiveMainImageRules, t),
+    secondaryImageText: secondaryImageSummary(safeRules.effectiveSecondaryImageRules, t),
     highRiskFields,
     bannedWords: safeRules.effectiveBannedWords || [],
     cautionWords: safeRules.effectiveCautionWords || [],

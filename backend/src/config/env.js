@@ -2,6 +2,7 @@ import dotenv from 'dotenv';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { paidProviderSummary } from '../services/paidOperationPolicy.js';
 
 const configPath = fileURLToPath(import.meta.url);
 const defaultBackendRoot = path.resolve(path.dirname(configPath), '..', '..');
@@ -51,6 +52,7 @@ export function getProviderConfigSummary() {
   }[selectedBackgroundProvider];
 
   return {
+    paidDestinations: paidProviderSummary(),
     AI_PROVIDER: process.env.AI_PROVIDER || null,
     VISION_PROVIDER: process.env.VISION_PROVIDER || null,
     IMAGE_PROVIDER: process.env.IMAGE_PROVIDER || null,

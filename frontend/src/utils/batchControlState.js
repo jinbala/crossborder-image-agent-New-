@@ -1,3 +1,5 @@
+import {exportReportText} from './exportReportLabels.js';
+
 const resetFeedback = '导入状态已重置，请重新扫描目录并重新导入 SKU。';
 const deleteFeedback = 'batch 记录已删除，本地图片未删除。';
 
@@ -70,13 +72,13 @@ export function resetImportActionMode({ batchTask = null, scanResult = null } = 
   return 'hidden';
 }
 
-export function buildSkuRowsForBatchPage({ batchTask = null, scanResult = null } = {}) {
+export function buildSkuRowsForBatchPage({ batchTask = null, scanResult = null } = {}, t) {
   if (batchTask?.id) {
     return (batchTask.skuTasks || []).map((sku) => ({
       ...sku,
       sourceType: 'batch',
       rowSource: 'currentBatchTask',
-      sourceLabel: '当前 batch SKU'
+      sourceLabel: exportReportText(t,'当前 batch SKU')
     }));
   }
   return (scanResult?.candidates || []).map((candidate) => ({
@@ -89,12 +91,12 @@ export function buildSkuRowsForBatchPage({ batchTask = null, scanResult = null }
     queueStatus: candidate.status || 'new',
     sourceType: 'scan',
     rowSource: candidate.status === 'imported' ? 'importedElsewhere' : 'scanCandidate',
-    sourceLabel: candidate.status === 'imported' ? '已导入到其他 batch' : '扫描发现 / 待导入',
+    sourceLabel: exportReportText(t,candidate.status === 'imported' ? '已导入到其他 batch' : '扫描发现 / 待导入'),
     displayHint: candidate.status === 'imported'
-      ? `已导入到其他 batch${candidate.existingBatchId ? `：${candidate.existingBatchId}` : ''}`
+      ? candidate.existingBatchId ? exportReportText(t,'已导入到其他 batch：{id}',{id:candidate.existingBatchId}) : exportReportText(t,'已导入到其他 batch')
       : candidate.status === 'new'
-        ? '可重新导入'
-        : '扫描候选',
+        ? exportReportText(t,'可重新导入')
+        : exportReportText(t,'扫描候选'),
     taskId: null,
     folderPath: candidate.folderPath || '',
     warnings: candidate.warnings || [],

@@ -33,59 +33,59 @@ const groupLabels = {
   completed: '已完成'
 };
 
-function groupSection(plan, key) {
+function groupSection(plan, key, t) {
   return {
     key,
-    title: groupLabels[key],
+    title: t(groupLabels[key]),
     rows: asArray(plan.resumeGroups?.[key])
   };
 }
 
-export function getBatchResumePlanDisplayModel(plan) {
+export function getBatchResumePlanDisplayModel(plan, t = value => value) {
   if (!plan) {
     return {
-      emptyText: '暂无批量恢复计划预览，请先选择一个 batch。',
+      emptyText: t('暂无批量恢复计划预览，请先选择一个 batch。'),
       summaryCards: [],
       groupSections: {
-        safeMockRetry: groupSection({}, 'safeMockRetry'),
-        manualRequired: groupSection({}, 'manualRequired'),
-        waiting: groupSection({}, 'waiting'),
-        blocked: groupSection({}, 'blocked'),
-        noReview: groupSection({}, 'noReview'),
-        completed: groupSection({}, 'completed')
+        safeMockRetry: groupSection({}, 'safeMockRetry', t),
+        manualRequired: groupSection({}, 'manualRequired', t),
+        waiting: groupSection({}, 'waiting', t),
+        blocked: groupSection({}, 'blocked', t),
+        noReview: groupSection({}, 'noReview', t),
+        completed: groupSection({}, 'completed', t)
       },
       orderedRows: [],
       warnings: [],
       recommendations: [],
-      safetyNotice: '当前仅为批量恢复计划预览，不会自动恢复整批。请逐个 SKU 执行安全重试。'
+      safetyNotice: t('当前仅为批量恢复计划预览，不会自动恢复整批。请逐个 SKU 执行安全重试。')
     };
   }
   const summary = plan.summary || {};
   const groupSections = {
-    safeMockRetry: groupSection(plan, 'safeMockRetry'),
-    manualRequired: groupSection(plan, 'manualRequired'),
-    waiting: groupSection(plan, 'waiting'),
-    blocked: groupSection(plan, 'blocked'),
-    noReview: groupSection(plan, 'noReview'),
-    completed: groupSection(plan, 'completed')
+    safeMockRetry: groupSection(plan, 'safeMockRetry', t),
+    manualRequired: groupSection(plan, 'manualRequired', t),
+    waiting: groupSection(plan, 'waiting', t),
+    blocked: groupSection(plan, 'blocked', t),
+    noReview: groupSection(plan, 'noReview', t),
+    completed: groupSection(plan, 'completed', t)
   };
   return {
-    emptyText: summary.totalSku === 0 ? '当前 batch 暂无 SKU。' : '',
+    emptyText: summary.totalSku === 0 ? t('当前 batch 暂无 SKU。') : '',
     summaryCards: [
-      { label: '可安全 mock 重试', value: summary.recoverableSku || 0 },
-      { label: '需人工处理', value: summary.manualOnlySku || 0 },
-      { label: '待开始识别 SKU', value: summary.waitingSku || 0 },
-      { label: 'blocked SKU', value: summary.blockedSku || 0 },
-      { label: '未审核 SKU', value: summary.noReviewSku || 0 },
-      { label: '已完成 SKU', value: summary.completedSku || 0 },
-      { label: '预计重试动作', value: summary.estimatedRetryActions || 0 },
-      { label: '付费 API 风险', value: summary.paidApiRiskCount || 0 }
+      { label: t('可安全 mock 重试'), value: summary.recoverableSku || 0 },
+      { label: t('需人工处理'), value: summary.manualOnlySku || 0 },
+      { label: t('待开始识别 SKU'), value: summary.waitingSku || 0 },
+      { label: t('blocked SKU'), value: summary.blockedSku || 0 },
+      { label: t('未审核 SKU'), value: summary.noReviewSku || 0 },
+      { label: t('已完成 SKU'), value: summary.completedSku || 0 },
+      { label: t('预计重试动作'), value: summary.estimatedRetryActions || 0 },
+      { label: t('付费 API 风险'), value: summary.paidApiRiskCount || 0 }
     ],
     groupSections,
     orderedRows: asArray(plan.orderedPlan),
     warnings: asArray(plan.warnings),
     recommendations: asArray(plan.recommendations),
-    safetyNotice: '当前仅为批量恢复计划预览，不会自动恢复整批。请逐个 SKU 执行安全重试。涉及真实 Provider 或 Image2 的步骤当前不会自动执行。',
+    safetyNotice: t('当前仅为批量恢复计划预览，不会自动恢复整批。请逐个 SKU 执行安全重试。涉及真实 Provider 或 Image2 的步骤当前不会自动执行。'),
     nextSuggestedAction: plan.nextSuggestedAction || ''
   };
 }

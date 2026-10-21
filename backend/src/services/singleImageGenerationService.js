@@ -136,7 +136,7 @@ function providerFailureResult(error, provider = 'openai') {
 }
 
 async function callImageProvider({ task, plan, generationRequest, input, deps }) {
-  if (!input.confirmReal && !deps.imageProvider) {
+  if (input.confirmReal !== true) {
     return providerFailureResult({
       code: 'REAL_GENERATION_NOT_CONFIRMED',
       message: 'confirmReal=true is required before calling a real image provider.'
@@ -218,6 +218,7 @@ function buildReport({ task, plan, image, providerResult, mattingResult, fallbac
 export async function runSingleImageGeneration(input = {}, deps = {}) {
   requireSingleTask(input);
   const imageType = normalizeImageType(input.imageType);
+  if (input.confirmReal !== true) throw Object.assign(new Error('请先确认本次图片外发与可能产生的费用；未启动抠图或生图'), { statusCode: 403, code: 'REAL_GENERATION_NOT_CONFIRMED' });
   const task = await (deps.taskReader || getTask)(input.taskId);
   if (!task) {
     const error = new Error('Task not found');

@@ -73,6 +73,33 @@ test('getExportPackageDisplayModel summarizes preview and package result for Bat
   assert.equal(model.failedSkuRows[0].sku, 'SKU002');
 });
 
+test('final export result wins over stale preview counts, warnings and tree without changing either record', () => {
+  const initial = preview(), result = { zipFile:'final.zip', relativePath:'outputs/export-packages/final.zip',
+    summary:{...initial.summary,readyImageCount:1,missingImageCount:31,mockImageCount:1}, warnings:['final warning'],
+    directoryTree:[{path:'Amazon/SKU001/01_main.jpg',status:'missing',sourceType:'mock'}],failedSku:[] };
+  const original = JSON.stringify({initial,result}), model = getExportPackageDisplayModel({preview:initial,result});
+  assert.equal(model.summaryCards.find(card=>card.label==='可导出图片').value,'1');
+  assert.equal(model.summaryCards.find(card=>card.label==='缺失图片').value,'31');
+  assert.equal(model.treeRows[0].status,'missing');assert.equal(model.failedSkuRows.length,0);
+  assert.equal(model.warningText,'final warning');assert.equal(JSON.stringify({initial,result}),original);
+});
+
+test('unknown source types including prototype keys remain raw labels and option edits clear stale export evidence',()=>{
+  const model=getExportPackageDisplayModel({preview:preview({directoryTree:[{path:'x',sourceType:'constructor'},{path:'y',sourceType:'__proto__'}]})});
+  assert.deepEqual(model.treeRows.map(row=>row.sourceTypeDisplay),['constructor','__proto__']);
+  const pageSource=fs.readFileSync(path.resolve('src/pages/BatchPage.jsx'),'utf8');
+  for(const name of ['updateExportPackageOption','toggleExportPackagePlatform']){
+    const block=pageSource.slice(pageSource.indexOf(`function ${name}`),pageSource.indexOf('\n  }',pageSource.indexOf(`function ${name}`)));
+    assert.match(block,/if \(busy\) return/);assert.match(block,/setExportPackagePreview\(null\)/);assert.match(block,/setExportPackageResult\(null\)/);
+  }
+  assert.match(pageSource,/fieldset data-export-package-options disabled=\{Boolean\(busy\)\}/);
+});
+
+test('an unverified generated source is not presented as real generated evidence',()=>{
+  const model=getExportPackageDisplayModel({preview:preview({directoryTree:[{path:'x',sourceType:'generated'}]})});
+  assert.equal(model.treeRows[0].sourceTypeDisplay,'生成图片（来源未验证）');
+});
+
 test('exportPackageJson and download URL strip sensitive local details', () => {
   const json = exportPackageJson({
     preview: preview({ warnings: ['API_KEY=abc sk-secret D:\\Code\\.env app.sqlite node_modules'] }),

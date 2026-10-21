@@ -118,7 +118,7 @@ test('matting routes expose Image2 fields without leaking secrets', async () => 
 
   await request(app)
     .post('/api/matting/run')
-    .send({ taskId: 'task-1', imageId: 'image-1', provider: 'image2' })
+    .send({ taskId: 'task-1', imageId: 'image-1', provider: 'image2', confirmExternal: true, confirmDataTransfer: true })
     .expect(200)
     .expect((res) => {
       assert.equal(res.body.requestedProvider, 'image2');
@@ -129,10 +129,20 @@ test('matting routes expose Image2 fields without leaking secrets', async () => 
 
   await request(app)
     .post('/api/matting/compare')
-    .send({ taskId: 'task-1', imageId: 'image-1' })
+    .send({ taskId: 'task-1', imageId: 'image-1', confirmExternal: true, confirmDataTransfer: true })
     .expect(200)
     .expect((res) => {
       assert.equal(res.body.sharp.status, 'success');
       assert.equal(res.body.image2.status, 'success');
     });
+});
+
+test('remote matting and compare require per-task cost and data transfer confirmation before any call', async () => {
+  let calls = 0;
+  const app = makeApp({ getMattingConfig: () => ({ image2Available: true, externalConfigured: true }), runMatting: async () => { calls++; return { ok: true }; }, compareMatting: async () => { calls++; return { ok: true }; } });
+  await request(app).post('/api/matting/run').send({ taskId: 't', provider: 'image2' }).expect(400);
+  await request(app).post('/api/matting/compare').send({ taskId: 't', confirmExternal: true }).expect(400);
+  assert.equal(calls, 0);
+  await request(app).post('/api/matting/run').send({ taskId: 't', provider: 'image2', confirmExternal: true, confirmDataTransfer: true }).expect(200);
+  assert.equal(calls, 1);
 });

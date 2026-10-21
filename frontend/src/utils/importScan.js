@@ -1,3 +1,5 @@
+import {exportReportText} from './exportReportLabels.js';
+
 function isEventLike(value) {
   if (!value || typeof value !== 'object') return false;
   return Boolean(value.currentTarget || value.nativeEvent || value.target?.nodeType || value.target?.__reactFiber);
@@ -36,23 +38,30 @@ export function normalizeImportBatchFolderPayload(input = {}) {
   };
 }
 
-export function buildScanSummaryMessage(scanResult) {
+export function buildScanSummaryMessage(scanResult, t) {
   const candidates = Array.isArray(scanResult?.candidates) ? scanResult.candidates : [];
   const total = scanResult?.summary?.totalFolders ?? candidates.length;
-  return `扫描完成，共发现 ${total} 个 SKU 文件夹`;
+  return exportReportText(t, '扫描完成，共发现 {count} 个 SKU 文件夹', {count:total});
+}
+
+export function getScanFeedbackDisplay(feedback, t) {
+  if (feedback?.status === 'scanning') return {text:exportReportText(t,'正在扫描导入目录...'),isError:false};
+  if (feedback?.status === 'completed') return {text:buildScanSummaryMessage({summary:{totalFolders:feedback.totalFolders}},t),isError:false};
+  if (feedback?.status === 'failed') return {text:exportReportText(t,'扫描失败：{message}',{message:feedback.message || ''}),isError:true};
+  return {text:'',isError:false};
 }
 
 export function hasScanCandidates(scanResult) {
   return Array.isArray(scanResult?.candidates) && scanResult.candidates.length > 0;
 }
 
-export function getScanCandidateDisplay(candidate = {}, options = {}) {
+export function getScanCandidateDisplay(candidate = {}, options = {}, t) {
   const status = candidate.status || 'new';
   if (status === 'new') {
     return {
       status,
-      label: '可导入',
-      hint: '扫描发现，可导入到当前 batch',
+      label: exportReportText(t, '可导入'),
+      hint: exportReportText(t, '扫描发现，可导入到当前 batch'),
       selectable: true
     };
   }
@@ -60,28 +69,28 @@ export function getScanCandidateDisplay(candidate = {}, options = {}) {
     const isCurrentBatch = Boolean(options.currentBatchId && candidate.existingBatchId === options.currentBatchId);
     return {
       status,
-      label: isCurrentBatch ? '已导入当前 batch' : candidate.existingBatchId ? '已导入到其他 batch' : '已导入',
+      label: exportReportText(t, isCurrentBatch ? '已导入当前 batch' : candidate.existingBatchId ? '已导入到其他 batch' : '已导入'),
       hint: isCurrentBatch
-        ? '已导入当前 batch'
+        ? exportReportText(t, '已导入当前 batch')
         : candidate.existingBatchId
-          ? `已导入到其他 batch：${candidate.existingBatchId}`
-        : '已导入，不能重复导入',
+          ? exportReportText(t, '已导入到其他 batch：{id}', {id:candidate.existingBatchId})
+        : exportReportText(t, '已导入，不能重复导入'),
       selectable: false
     };
   }
   if (status === 'skipped') {
     return {
       status,
-      label: '已跳过',
-      hint: candidate.reason || '本次导入已跳过',
+      label: exportReportText(t, '已跳过'),
+      hint: candidate.reason || exportReportText(t, '本次导入已跳过'),
       selectable: false
     };
   }
   if (['empty', 'invalid', 'too_many_images', 'too_large'].includes(status)) {
     return {
       status,
-      label: '无效 / 空文件夹',
-      hint: candidate.errors?.[0]?.message || candidate.warnings?.[0]?.message || '请检查 SKU 文件夹和图片数量',
+      label: exportReportText(t, '无效 / 空文件夹'),
+      hint: candidate.errors?.[0]?.message || candidate.warnings?.[0]?.message || exportReportText(t, '请检查 SKU 文件夹和图片数量'),
       selectable: false
     };
   }

@@ -1,4 +1,6 @@
 import express from 'express';
+import { getAcceptanceWorkspace, saveAcceptanceWorkspace, resetAcceptanceWorkspace, validateAcceptanceWorkspace } from '../services/acceptanceWorkspaceService.js';
+import { asyncHandler } from '../utils/asyncHandler.js';
 import {
   buildFinalAcceptanceReport,
   buildFinalAcceptanceTemplate,
@@ -11,6 +13,10 @@ import {
 } from '../services/realApiAcceptanceService.js';
 
 const router = express.Router();
+router.get('/workspace', asyncHandler(async (req, res) => res.json(getAcceptanceWorkspace(req.query.expectedActorId))));
+router.post('/workspace', asyncHandler(async (req, res) => res.json(saveAcceptanceWorkspace(req.body))));
+router.post('/workspace/validate', asyncHandler(async (req, res) => res.json(validateAcceptanceWorkspace(req.body?.document, req.body?.expectedActorId))));
+router.post('/workspace/reset', asyncHandler(async (req, res) => res.json(resetAcceptanceWorkspace(req.body))));
 
 function acceptanceOptions(req) {
   const targetSkuCount = Number(req.query?.targetSkuCount);

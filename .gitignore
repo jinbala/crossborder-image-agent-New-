@@ -18,3 +18,11 @@ backend/data/
 backend/test-results/
 backend/data/*.sqlite
 backend/data/*.sqlite-*
+desktop/runtime/
+desktop/release/
+desktop/.smoke-data/
+.venv-rembg/
+desktop/src/update-trust.json
+*.private.pem
+*.enc
+models/

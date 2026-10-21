@@ -53,6 +53,13 @@ beforeEach(async () => {
   await resetDatabaseForTests();
 });
 
+test('single-image HTTP route refuses missing approval instead of falling through to local or Image2 processing', async () => {
+  await createTask(task()); const before = await getTask('route-single-real-task');
+  for (const confirmReal of [undefined, false, 'true']) await request(app).post('/api/generate/single-image')
+    .send({ taskId: before.id, imageType: 'main_image', mattingProvider: 'image2', confirmReal }).expect(403);
+  assert.deepEqual(await getTask(before.id), before);
+});
+
 test('POST /api/generate/single-image returns sanitized single image report without mutating task', async () => {
   await createTask(task());
   const before = await getTask('route-single-real-task');
@@ -61,6 +68,7 @@ test('POST /api/generate/single-image returns sanitized single image report with
     .post('/api/generate/single-image')
     .send({
       taskId: 'route-single-real-task',
+      confirmReal: true,
       imageType: 'main_image',
       realMode: 'text_to_image',
       mattingProvider: 'sharp'
@@ -90,7 +98,7 @@ test('GET /api/generate/:taskId/report returns latest in-memory report', async (
   await createTask(task());
   await request(app)
     .post('/api/generate/single-image')
-    .send({ taskId: 'route-single-real-task', imageType: 'detail_image' })
+    .send({ taskId: 'route-single-real-task', imageType: 'detail_image', confirmReal: true })
     .expect(200);
 
   await request(app)

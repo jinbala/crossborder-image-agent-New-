@@ -38,6 +38,7 @@ test('normalizeListingExportOptions keeps supported platforms and requires expli
   assert.deepEqual(normalizeListingExportOptions({ platforms: ['amazon', 'temu', 'bad'], confirmExport: true }), {
     platforms: ['amazon', 'temu'],
     includeMockImages: true,
+    includeRealSamples: false,
     confirmExport: true
   });
   assert.deepEqual(normalizeListingExportOptions({ platforms: [] }).platforms, ['amazon']);

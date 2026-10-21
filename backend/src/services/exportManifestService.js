@@ -1,3 +1,5 @@
+import { exportImageSourceType } from '../../../frontend/src/utils/exportTargets.js';
+
 const IMAGE_TYPE_ORDER = [
   ['main_image', '01_main.jpg'],
   ['feature_image', '02_feature.jpg'],
@@ -71,7 +73,8 @@ export function normalizePlatforms(platforms = []) {
 }
 
 export function platformFolder(platformId) {
-  return PLATFORM_FOLDERS[String(platformId || '').toLowerCase()] || safeSegment(platformId || 'marketplace', 'Marketplace');
+  const key = String(platformId || '').toLowerCase();
+  return Object.hasOwn(PLATFORM_FOLDERS, key) ? PLATFORM_FOLDERS[key] : safeSegment(platformId || 'marketplace', 'Marketplace');
 }
 
 export function skuValue(task = {}, skuTask = {}) {
@@ -83,12 +86,7 @@ export function imageTypeFileName(imageType) {
 }
 
 export function sourceTypeForImage(image = {}) {
-  if (!image || !Object.keys(image).length) return 'missing';
-  if (image.sourceType) return image.sourceType;
-  if (image.fallbackToMock) return 'fallbackMock';
-  if (image.isMockPreview || image.provider === 'mock' || image.mockPreview) return 'mock';
-  if (image.isRealGenerated || image.realMode || image.provider === 'openai') return 'real';
-  return 'generated';
+  return exportImageSourceType(image);
 }
 
 export function csvEscape(value) {
