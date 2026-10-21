@@ -328,7 +328,7 @@ OPENAI_IMAGE_MODEL=gpt-image-2
 IMAGE_OUTPUT_SIZE=1536x1536
 ```
 
-Only `lifestyle_image` cards show `灏濊瘯鐪熷疄鑳屾櫙鐢熸垚` when `safeForRealGeneration=true`. Other image types continue to use mock generation. If OpenAI fails or the key is missing, the backend falls back to mock and records `fallbackToMock` and `realGenerationError`.
+Only `lifestyle_image` cards show `尝试真实背景生成` when `safeForRealGeneration=true`. Other image types continue to use mock generation. If OpenAI fails or the key is missing, the backend falls back to mock and records `fallbackToMock` and `realGenerationError`.
 
 Real API final-acceptance small samples are intentionally narrower than the full image-plan system. The real-api acceptance endpoint currently allows only `main_image`, `feature_image`, and `detail_image` samples, with explicit confirmations for paid API usage and no platform upload. This is a controlled real-test sample limit; it does not mean the system only supports three image types. Platform rules and review reports are internal planning and risk-check helpers, not official marketplace approval and not a guarantee of platform acceptance.
 
@@ -422,18 +422,18 @@ Place temporary real product images under `backend/test-assets/` or pass another
 2. Configure local `.env` with `VISION_PROVIDER=qwen`, `VISION_PROVIDER=openai`, or `VISION_PROVIDER=gemini`.
 3. Open the app.
 4. Upload 1-15 product images.
-5. Click `涓婁紶骞惰瘑鍒叏閮ㄥ浘鐗嘸.
+5. Click `上传并识别全部图片`.
 6. Open the product confirmation page.
 7. Check provider, model, and duration.
 8. Check product information fields.
-9. Check `鍥剧墖鏂囧瓧璇嗗埆缁撴灉`.
-10. Check `璇嗗埆椋庨櫓鎻愮ず`.
+9. Check `图片文字识别结果`.
+10. Check `识别风险提示`.
 11. Manually correct product information.
 12. Confirm product info and continue through the mock image-plan flow.
 
 ## Multi-Platform Image Packs
 
-v3.4 supports choosing multiple marketplace targets in one task. On the platform rules page, select Amazon, Temu, Noon, Ozon, Rakuten, or use the quick selections such as `Amazon + Temu`, `Amazon + Noon`, and `鍏ㄩ儴骞冲彴`.
+v3.4 supports choosing multiple marketplace targets in one task. On the platform rules page, select Amazon, Temu, Noon, Ozon, Rakuten, or use the quick selections such as `Amazon + Temu`, `Amazon + Noon`, and `全部平台`.
 
 Each target stores its own `targetId`, platform, site, language, category, platform rule snapshot, and category rule snapshot. Image plans, generated images, review results, prompts, and exports keep `targetId` / `platformId` so results can be traced back to the correct marketplace rules.
 
@@ -548,10 +548,10 @@ The batch page is available at `/batches`. Enter a local `folderPath`, choose de
 
 Batch actions are intentionally conservative:
 
-- `鎵归噺璇嗗埆` runs the configured VisionProvider per SKU, but does not confirm product information.
+- `批量识别` runs the configured VisionProvider per SKU, but does not confirm product information.
 - Sellers must open each SKU and confirm product information manually.
-- `搴旂敤骞冲彴 targets` writes the selected multi-platform targets to confirmed SKUs.
-- `鎵归噺鐢熸垚鏂规`, `鎵归噺鐢熸垚鍥剧墖`, and `鎵归噺瀹℃牳` skip SKUs whose status is not ready.
+- `应用平台 targets` writes the selected multi-platform targets to confirmed SKUs.
+- `批量生成方案`, `批量生成图片`, and `批量审核` skip SKUs whose status is not ready.
 - A failed SKU does not stop the rest of the batch; the batch records per-SKU success, skipped, failed, and error details.
 
 Batch queues:
@@ -806,21 +806,26 @@ sku002-hard-drive/
 batch-master-metadata.json
 ```
 
-## v5.0 鏁版嵁娓呯悊 / 涓存椂鏂囦欢绠＄悊
+## v5.0 数据清理 / 临时文件管理
 
-鏁版嵁娓呯悊椤甸潰浣嶄簬 `/cleanup`锛岀敤浜庢煡鐪嬫湰鍦拌繍琛屾枃浠跺崰鐢紝骞舵墜鍔ㄩ瑙堛€佺‘璁ゆ竻鐞嗘棫鐨勮繍琛屼骇鐗┿€傚畠鍙鐞嗘槑纭?allowlist 鍐呯殑杩愯鐩綍锛屼緥濡?`.vision-tmp`銆乣backend/test-results`銆佹棫 `outputs`銆佹棫瀵煎嚭 ZIP銆佹棫澶囦唤 ZIP銆佷复鏃舵姞鍥炬枃浠跺拰鏃?mock 鍥剧墖銆?
-杩欎釜鍔熻兘涓嶄細娓呯悊 `.env`銆乣.env.*`銆丄PI Key銆乣backend/data/app.sqlite`銆乣backend/data/db.json`銆佹簮鐮佺洰褰曘€佹祴璇曟簮鐮併€乣docs`銆乣README.md`銆乣node_modules`銆乣package.json` 鎴?`package-lock.json`銆傚鍎?`uploads` 绗竴鐗堝彧鏍囪涓洪珮椋庨櫓锛岄粯璁や笉浼氬垹闄ゃ€?
-蹇呴』鍏堥瑙堝啀娓呯悊锛屾槸涓轰簡璁╃敤鎴风湅鍒板皢瑕佸垹闄ょ殑鏂囦欢銆佸ぇ灏忋€佷慨鏀规椂闂淬€侀闄╃瓑绾у拰涓枃鍘熷洜銆俙POST /api/cleanup/preview` 鍙繑鍥炲€欓€夊垪琛紝涓嶅垹闄や换浣曟枃浠讹紱`POST /api/cleanup/run` 蹇呴』浼犲叆 `confirm=true`锛屽苟涓斿悗绔細閲嶆柊鎸夊悓涓€瑙勫垯鐢熸垚鍊欓€夊垪琛ㄥ悗鍐嶅垹闄わ紝涓嶇浉淇″墠绔紶鏉ョ殑鏂囦欢璺緞銆?
-鎺ㄨ崘娓呯悊绛栫暐锛?
-- `.vision-tmp`锛? 澶╁墠鍙竻鐞嗐€?- `backend/test-results`锛? 澶╁墠鍙竻鐞嗐€?- `outputs`锛?0 澶╁墠璋ㄦ厧娓呯悊銆?- 瀵煎嚭 ZIP锛?0 澶╁墠璋ㄦ厧娓呯悊銆?- `backups`锛?0 澶╁墠璋ㄦ厧娓呯悊锛屾竻鐞嗗墠纭宸叉湁鏇存柊蹇収銆?- `uploads`锛氶粯璁や笉寤鸿鑷姩娓呯悊銆?
-娓呯悊鎺ュ彛锛?
+数据清理页面位于 `/cleanup`，用于查看本地运行文件占用，并手动预览、确认清理旧的运行产物。它只处理明确 allowlist 内的运行目录，例如 `.vision-tmp`、`backend/test-results`、旧 `outputs`、旧导出 ZIP、旧备份 ZIP、临时抠图文件和旧 mock 图片。
+这个功能不会清理 `.env`、`.env.*`、API Key、`backend/data/app.sqlite`、`backend/data/db.json`、源码目录、测试源码、`docs`、`README.md`、`node_modules`、`package.json` 或 `package-lock.json`。孤儿 `uploads` 第一版只标记为高风险，默认不会删除。
+必须先预览再清理，是为了让用户看到将要删除的文件、大小、修改时间、风险等级和中文原因。`POST /api/cleanup/preview` 只返回候选列表，不删除任何文件；`POST /api/cleanup/run` 必须传入 `confirm=true`，并且后端会重新按同一规则生成候选列表后再删除，不相信前端传来的文件路径。
+推荐清理策略：
+- `.vision-tmp`：3 天前可清理。
+- `backend/test-results`：3 天前可清理。
+- `outputs`：30 天前谨慎清理。
+- 导出 ZIP：30 天前谨慎清理。
+- `backups`：30 天前谨慎清理，清理前确认已有更新快照。
+- `uploads`：默认不建议自动清理。
+清理接口：
 ```text
 GET /api/cleanup/summary
 POST /api/cleanup/preview
 POST /api/cleanup/run
 ```
 
-娓呯悊鍔熻兘娌℃湁瀹氭椂浠诲姟锛屼篃涓嶄細鑷姩鎵ц銆傛瘡娆″垹闄ら兘闇€瑕佹墜鍔ㄩ瑙堝拰浜屾纭銆?
+清理功能没有定时任务，也不会自动执行。每次删除都需要手动预览和二次确认。
 ## Audit Notes
 
 Frontend `npm audit` currently reports 2 moderate issues from Vite and esbuild development tooling. The suggested automatic fix requires a Vite major upgrade. v0.3 does not run `npm audit fix --force`; the risk is limited to development server exposure, and the Vite server is configured for localhost.
