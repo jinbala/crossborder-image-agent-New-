@@ -43,6 +43,7 @@ export async function getDesktopRuntime(query = {}) {
   const db = platformDb(), total = db.prepare(`SELECT COUNT(*) AS n FROM task_index ${where}`).get(...scope.args).n;
   const records = db.prepare(`SELECT * FROM task_index ${where} ORDER BY updated_at DESC,id LIMIT ? OFFSET ?`).all(...scope.args, pageSize, (page - 1) * pageSize);
   const recovery = records.map((row) => ({ id: row.id, type: row.kind, name: row.title, state: row.state, updatedAt: row.updated_at, href: row.href,
+    manifestRecovery: JSON.parse(row.summary).manifestRecovery,
     hint: row.kind === 'sku-pack' ? '从 SKU 恢复点继续，已完成 SKU 不重复' : row.kind === 'collection-job' ? '选择断点继续或重试失败商品' : '查看任务详情并手动确认继续' }));
   return { desktop: Boolean(process.env.APP_DESKTOP_VERSION), version: process.env.APP_DESKTOP_VERSION || null,
     storageDriver: getStorageDriver(), recovery, recoveryPagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },

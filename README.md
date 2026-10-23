@@ -1,6 +1,6 @@
 ﻿# Crossborder Image Agent
 
-Windows desktop 0.30.0 passed local source and portable-EXE verification (306 checks each): collection recovery separates read-only snapshots, explicit manifest repair and manual continuation. See [scope and verification](docs/verification-0.30.0.md). The user confirmed successful live Temu transfer after reloading extension 0.5.5; image previews, batch collection and CAPTCHA pause/resume still need separate acceptance. Clean-machine installation, signing and the 2-second startup target remain open.
+Windows desktop 0.31.0 passed local source and portable-EXE verification (308 checks each), with 724 backend, 316 frontend and 22 desktop unit tests passing. Historical indexing can discover valid backup/archive snapshots when the primary manifest is missing or truncated; discovery is read-only and never resumes tasks automatically. See [scope and verification](docs/verification-0.31.0.md). On 2026-10-24 the user also confirmed the transferred Temu task and image previews work; multi-product collection, image completeness/quality and CAPTCHA pause/resume still need separate acceptance. Clean-machine installation, signing, the 2-second startup target and full requirement coverage remain open. Git author identity is now user-confirmed and local version commits are being archived separately; no remote push is authorized.
 
 Crossborder Image Agent is a full-stack MVP for cross-border ecommerce product image production. It runs the workflow from product image upload to mock recognition, product confirmation, platform rule selection, prompt-backed image plans, mock image generation, compliance review, and ZIP export.
 
@@ -8,7 +8,7 @@ The current version is v3.1. Image recognition can run with mock, Qwen, OpenAI, 
 
 ## Tech Stack
 
-Windows desktop 0.29.0 adds read-only backup/archive snapshots and full-manifest downloads for generic workbench results, atomic current backups, and explicit ZIP central-directory integrity checks. Extension remains 0.5.5. See [verification and limits](docs/verification-0.29.0.md) and [implementation progress](docs/implementation-progress.md); live Temu transfer, model licensing/quality, official shop sandboxes and clean-machine release gates remain open. Local commits await a user-confirmed Git author identity; nothing has been pushed remotely.
+Windows desktop 0.29.0 adds read-only backup/archive snapshots and full-manifest downloads for generic workbench results, atomic current backups, and explicit ZIP central-directory integrity checks. Extension remains 0.5.5. See its historical [verification and limits](docs/verification-0.29.0.md) and current [implementation progress](docs/implementation-progress.md). Its accumulated changes were committed locally as 20c7399 after author confirmation; nothing has been pushed remotely.
 
 - Frontend: React, Vite, Tailwind CSS, React Router
 - Backend: Node.js, Express

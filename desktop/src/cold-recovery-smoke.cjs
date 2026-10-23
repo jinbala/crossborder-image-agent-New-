@@ -27,10 +27,22 @@ async function seedRecoveryProfile(dataRoot) {
     await Promise.all(Array.from({ length: Math.min(64, 10000 - offset) }, async (_, index) => {
       const id = `collect-job-cold-${String(offset + index).padStart(5, '0')}`;
       const directory = path.join(workbench, id), file = path.join(directory, 'manifest.json');
-      const bytes = JSON.stringify({ id, type: 'collection-job', status: 'paused', options: { name: `冷启动恢复 ${id}` },
-        createdAt: timestamp, updatedAt: timestamp, items: [{ id: 'fixture-row', status: 'pending', productUrl: 'https://benchmark.invalid/not-requested' }] });
-      await fs.mkdir(directory); await fs.writeFile(file, bytes, { flag: 'wx' });
-      manifests.push({ file, hash: digest(bytes) });
+      const position = offset + index;
+      const state = { id, type: 'collection-job', status: 'paused', options: { name: `冷启动恢复 ${id}`, mode: 'normal', replacementRules: [], minSales: 0, extraWaitMs: 0, timeoutMs: 10000, maxImagesPerProduct: 10, maxAttempts: 2, downloadOriginal: true, randomFileNames: false },
+        summary: { total: 1, pending: 1 }, checkpointRevision: 2, createdAt: timestamp, updatedAt: timestamp,
+        items: [{ id: 'item-00001', index: 1, sku: 'COLD', title: '', status: 'pending', attempts: 0, imageUrls: ['https://benchmark.invalid/a.png'], images: [], productUrl: 'https://benchmark.invalid/not-requested' }] };
+      const bytes = JSON.stringify(state);
+      await fs.mkdir(directory);
+      async function fixtureFile(name, content) { const target = path.join(directory, name); await fs.writeFile(target, content, { flag: 'wx' }); manifests.push({ file: target, hash: digest(content) }); }
+      if (position < 3) {
+        if (position !== 1) await fixtureFile('manifest.json', '{interrupted');
+        if (position !== 1) await fixtureFile('manifest.backup.json', bytes);
+        if (position !== 0) {
+          const archive = new (require('adm-zip'))();
+          archive.addFile('manifest.json', Buffer.from(JSON.stringify({ ...state, checkpointRevision: position === 2 ? 1 : 2 })));
+          await fixtureFile(`${id}.zip`, archive.toBuffer());
+        }
+      } else { await fs.writeFile(file, bytes, { flag: 'wx' }); manifests.push({ file, hash: digest(bytes) }); }
     }));
   }
   await fs.writeFile(path.join(profile, 'desktop-session.json'), JSON.stringify({ version: 1, runId: randomUUID(), state: 'running', startedAt: timestamp }), { flag: 'wx' });
@@ -114,6 +126,13 @@ async function runRecoveryProbe({ window, dataRoot, requestApi, startupRecovery,
       metrics[`page${page}ResponseMs`] = Math.round(performance.now() - started); pages.push(runtime);
     }
     checks.coldRecoveryTenThousandPaged = pages.every((page, index) => page.recovery.length === 50 && page.recoveryPagination.page === index + 1 && page.recoveryPagination.total === 10000 && metrics[`page${index + 1}ResponseMs`] < 2000) && new Set(pages.flatMap(page => page.recovery.map(item => item.id))).size === 100;
+    checks.coldRecoverySnapshotIndex = pages[0].indexStatus.recovered === 3 && pages[0].indexStatus.failed === 0 &&
+      ['backup', 'archive', 'backup'].every((source, index) => pages[0].recovery.find(item => item.id === `collect-job-cold-${String(index).padStart(5, '0')}`)?.manifestRecovery?.source === source);
+    checks.coldRecoverySnapshotNotice = await window.webContents.executeJavaScript(`Boolean(document.querySelector('[data-recovery-snapshot-count]')?.innerText.includes('3')) && document.querySelector('[data-recovery-id="collect-job-cold-00000"]')?.innerText.includes('只读')`);
+    for (const index of [0, 1, 2]) {
+      const detail = await (await requestApi(`/api/workbench/collection-jobs/collect-job-cold-${String(index).padStart(5, '0')}`)).json();
+      checks.coldRecoverySnapshotIndex &&= detail.manifestRead?.readOnly === true && detail.items?.length === 1 && detail.items[0].status === 'pending';
+    }
     const before = await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('[data-recovery-id]'),node=>node.dataset.recoveryId)`);
     await window.webContents.executeJavaScript(`document.querySelector('[data-recovery-pager] button:last-of-type').click()`);
     checks.coldRecoveryUiPagination = await wait(window, `Boolean(document.querySelector('[data-recovery-loaded-page="2"]')) && document.querySelectorAll('[data-recovery-id]').length===50`, Date.now() + 5000);

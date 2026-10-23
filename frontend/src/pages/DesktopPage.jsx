@@ -85,9 +85,10 @@ export default function DesktopPage() {
         {recoveryIndexPending(runtime) && <p className="mb-3 rounded bg-blue-50 p-3 text-sm text-blue-800">{t('正在后台整理历史任务索引：{processed} / {total}。列表会自动刷新，原任务文件不变。', { processed: runtime.indexStatus.processed, total: runtime.indexStatus.total ?? t('检测中') })}</p>}
         {runtime?.indexStatus?.status === 'failed' && <p role="alert" className="mb-3 rounded bg-amber-50 p-3 text-sm text-amber-800">{t('历史任务索引未完成，当前列表可能不齐全。请到任务中心重建索引或重试刷新。')}</p>}
         {runtime?.indexStatus?.failed > 0 && <p className="mb-3 text-sm text-amber-800">{t('{count} 个历史清单损坏、超出索引体积限制或路径不合法，未自动纳入；请检查备份。其余任务不受影响。', { count: runtime.indexStatus.failed })}</p>}
+        {runtime?.indexStatus?.recovered > 0 && <p data-recovery-snapshot-count className="mb-3 text-sm text-amber-800">{t('{count} 个历史任务从备份或结果包只读纳入索引；主清单未修复，任务未执行。', { count: runtime.indexStatus.recovered })}</p>}
         <p className="mb-3 text-sm text-slate-600">{t("恢复前先查看任务详情。涉及付费生成或平台操作的任务由你确认后继续。")}</p>
         <div data-recovery-index-status={runtime?.indexStatus?.status || 'loading'} data-recovery-loaded-page={runtime?.recoveryPagination?.page || 0} className="space-y-2">{runtime?.recovery?.map((item) => <div data-recovery-id={item.id} key={`${item.type}:${item.id}`} className="flex flex-wrap items-center justify-between gap-3 rounded border border-slate-200 p-3">
-          <div><p className="font-medium">{item.name} <span className="text-sm text-slate-500">{item.state}</span></p><p className="text-sm text-slate-500">{item.hint}</p></div><Link to={item.href} className="btn-secondary">{t("查看任务")}</Link>
+          <div><p className="font-medium">{item.name} <span className="text-sm text-slate-500">{item.state}</span></p><p className="text-sm text-slate-500">{item.manifestRecovery?.readOnly === true ? t('此任务从恢复快照只读列出；请先查看详情并确认修复，不要直接继续。') : item.hint}</p></div><Link to={item.href} className="btn-secondary">{t("查看任务")}</Link>
         </div>)}{runtime && !runtime.recovery.length && <p className="text-sm text-slate-500">{t("没有需要恢复的任务。")}</p>}</div>
         <div data-recovery-pager><Pager pagination={runtime?.recoveryPagination} onPage={setRecoveryPage} /></div>
       </Section>

@@ -4,7 +4,9 @@ import { randomUUID } from 'node:crypto';
 import { setImmediate as yieldEventLoop } from 'node:timers/promises';
 import { platformDb, pageOptions, meta, setMeta, privateSafe } from './platformStore.js';
 import { paths, readDb } from './db.js';
-import { claimResource, ownerSql, currentActor, restrictedActor } from './ownershipService.js';
+import { claimResource, ownerSql, currentActor, restrictedActor, withActor } from './ownershipService.js';
+import { readWorkbenchSnapshot } from './workbenchSnapshotService.js';
+import { readSkuPackSnapshot } from './skuPackStateService.js';
 
 export function normalizedState(status) {
   if (['completed_with_errors', 'partialSuccess', 'partial_failed'].includes(status)) return 'partial';
@@ -16,7 +18,7 @@ export function normalizedState(status) {
   return ['draft', 'queued', 'running', 'waiting_user', 'paused', 'completed', 'partial', 'failed', 'cancelled'].includes(status) ? status : 'draft';
 }
 
-export function indexTask(record, kind = record.type || 'image', { registerOwner = true, preferNewer = false } = {}) {
+export function indexTask(record, kind = record.type || 'image', { registerOwner = true, preferNewer = false, manifestRecovery } = {}) {
   if (!record?.id) return;
   const db = platformDb();
   if (registerOwner && currentActor()) claimResource(['image', 'batch'].includes(kind) ? kind : 'job', record.id);
@@ -26,17 +28,23 @@ export function indexTask(record, kind = record.type || 'image', { registerOwner
   const href = kind === 'batch' ? `/batches/${encodeURIComponent(record.id)}` : kind === 'image' ? `/tasks/${encodeURIComponent(record.id)}/product`
     : kind === 'collection-job' ? `/workbench/collection?jobId=${encodeURIComponent(record.id)}` : kind === 'commerce-sandbox' ? `/commerce-sandbox/${encodeURIComponent(record.id)}` : `/results/${encodeURIComponent(record.id)}`;
   const exportedPath = String(record.exportFile?.filePath || '').replaceAll('\\', '/');
-  const summary = { ...(record.summary || {}), parentBatchId: record.batchId || null, downloadUrl: record.downloadUrl || (/^outputs\//.test(exportedPath) ? `/${exportedPath}` : null), sourceState: record.status,
+  const summary = { ...(record.summary || {}), manifestRecovery, parentBatchId: record.batchId || null, downloadUrl: record.downloadUrl || (/^outputs\//.test(exportedPath) ? `/${exportedPath}` : null), sourceState: record.status,
     imageCount: record.generatedImages?.length || record.sourceImages?.length || 0,
     thumbnail: record.generatedImages?.[0]?.previewUrl || record.sourceImages?.[0]?.previewUrl || record.items?.[0]?.images?.[0]?.url || record.items?.find((item) => item.url)?.url || (record.skuResults?.[0]?.items?.find((item) => item.outputFile) ? `/outputs/workbench/${record.id}/package/${record.skuResults[0].items.find((item) => item.outputFile).outputFile.split('/').map(encodeURIComponent).join('/')}` : null) };
-  db.prepare(`INSERT INTO task_index VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,state=excluded.state,sku=excluded.sku,title=excluded.title,href=excluded.href,summary=excluded.summary,updated_at=excluded.updated_at WHERE ?=0 OR excluded.updated_at>task_index.updated_at`).run(
-    record.id, kind, state, String(sku), String(title).slice(0, 500), href, JSON.stringify(summary), record.createdAt || new Date().toISOString(), record.updatedAt || record.createdAt || new Date().toISOString(), Number(preferNewer));
+  const updatedAt = record.updatedAt || record.createdAt || new Date().toISOString();
+  const result = db.prepare(`INSERT INTO task_index VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,state=excluded.state,sku=excluded.sku,title=excluded.title,href=excluded.href,summary=excluded.summary,updated_at=excluded.updated_at WHERE ?=0 OR excluded.updated_at>task_index.updated_at`).run(
+    record.id, kind, state, String(sku), String(title).slice(0, 500), href, JSON.stringify(summary), record.createdAt || new Date().toISOString(), updatedAt, Number(preferNewer));
+  if (result.changes || !preferNewer) return result.changes;
+  // An unchanged checkpoint may now be read from a fallback (or repaired).
+  // Refresh only that display marker, never regress its business state/content.
+  return db.prepare(`UPDATE task_index SET summary=${manifestRecovery ? "json_set(summary,'$.manifestRecovery',json(?))" : "json_remove(summary,'$.manifestRecovery')"} WHERE id=? AND kind=? AND state=? AND updated_at=?`)
+    .run(...(manifestRecovery ? [JSON.stringify(manifestRecovery)] : []), record.id, kind, state, updatedAt).changes;
 }
 
 let migration;
 export function legacyIndexStatus() {
   const status = meta('legacy-index-status', { status: meta('task-index-migrated', false) ? 'completed' : 'pending', processed: 0, total: null, failed: 0 });
-  return restrictedActor() ? { status: status.status, processed: 0, total: null, failed: 0 } : status;
+  return restrictedActor() ? { status: status.status, processed: 0, total: null, failed: 0, recovered: 0 } : status;
 }
 export function waitForLegacyIndex() { return migration?.promise || Promise.resolve(); }
 function startLegacyIndex() {
@@ -44,42 +52,62 @@ function startLegacyIndex() {
   const generation = randomUUID(), run = { generation, promise: null };
   migration = run;
   setMeta('legacy-index-generation', generation);
-  setMeta('legacy-index-status', { status: 'running', processed: 0, total: null, failed: 0 });
+  setMeta('legacy-index-status', { status: 'running', processed: 0, total: null, failed: 0, recovered: 0 });
   run.promise = (async () => {
     const root = path.join(paths.outputDir, 'workbench');
-    const entries = (await fs.readdir(root, { withFileTypes: true }).catch(() => [])).filter((entry) => entry.isDirectory() && !/^sku-pack-.*-part-\d+$/.test(entry.name));
-    const canonicalRoot = await fs.realpath(root).catch(() => null);
-    let processed = 0, failed = 0;
+    let entries;
+    try { entries = (await fs.readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory() && !/^sku-pack-.*-part-\d+$/.test(entry.name)); }
+    catch (error) { if (error.code === 'ENOENT') entries = []; else throw error; }
+    if (entries.length) {
+      const workspace = await fs.realpath(paths.rootDir), output = await fs.realpath(paths.outputDir), canonicalRoot = await fs.realpath(root);
+      const relative = path.relative(workspace, output), equal = (a, b) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+      if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !equal(canonicalRoot, path.join(output, 'workbench'))) throw new Error('OUTSIDE_WORKSPACE');
+    }
+    let processed = 0, failed = 0, recovered = 0;
     for (let offset = 0; offset < entries.length; offset += 16) {
       const records = await Promise.all(entries.slice(offset, offset + 16).map(async (entry) => {
         try {
-          const file = await fs.realpath(path.join(root, entry.name, 'manifest.json'));
-          const relative = path.relative(canonicalRoot, file);
-          if (relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('OUTSIDE_WORKSPACE');
-          const stat = await fs.stat(file); if (!stat.isFile() || stat.size > 128 * 1024 * 1024) throw new Error('MANIFEST_TOO_LARGE');
-          const record = JSON.parse(await fs.readFile(file, 'utf8'));
+          const directory = path.join(root, entry.name), canonicalDirectory = await fs.realpath(directory), canonicalRoot = await fs.realpath(root);
+          const equal = (a, b) => process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+          if ((await fs.lstat(directory)).isSymbolicLink() || !equal(canonicalDirectory, path.join(canonicalRoot, entry.name))) throw new Error('OUTSIDE_WORKSPACE');
+          const file = path.join(directory, 'manifest.json');
+          let record, stat, manifestRecovery;
+          try {
+            stat = await fs.lstat(file);
+            if (!stat.isFile() || stat.isSymbolicLink() || !equal(await fs.realpath(file), path.join(canonicalDirectory, 'manifest.json'))) throw new Error('INVALID_MANIFEST_PATH');
+            if (stat.size > 128 * 1024 * 1024) throw new Error('MANIFEST_TOO_LARGE');
+            record = JSON.parse(await fs.readFile(file, 'utf8'));
+          } catch (error) {
+            if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+            // Background indexing has always scanned all owners. Read only in that
+            // system context; never claim ownership, execute work, or return raw bytes.
+            const snapshot = await withActor(null, () => entry.name.startsWith('sku-pack-') ? readSkuPackSnapshot(entry.name) : readWorkbenchSnapshot(entry.name));
+            record = { ...snapshot.state };
+            manifestRecovery = { source: snapshot.source, sourceName: snapshot.sourceName, readOnly: true, primaryUnchanged: true };
+            stat = await fs.stat(directory);
+          }
           if (record.id !== entry.name || !/^[A-Za-z0-9_-]{1,220}$/.test(record.id)) throw new Error('MANIFEST_ID_MISMATCH');
           if (typeof record.type !== 'string' || !/^[a-z][a-z0-9-]{0,60}$/.test(record.type)) throw new Error('MANIFEST_TYPE_INVALID');
           if (typeof record.createdAt !== 'string' || Number.isNaN(Date.parse(record.createdAt))) record.createdAt = stat.mtime.toISOString();
           if (typeof record.updatedAt !== 'string' || Number.isNaN(Date.parse(record.updatedAt))) record.updatedAt = record.createdAt;
-          return record;
+          return { record, manifestRecovery };
         } catch { return null; }
       }));
       if (meta('legacy-index-generation') !== generation) return;
       platformDb().transaction(() => {
-        for (const record of records) {
-          if (!record) { failed++; continue; }
-          try { indexTask(record, undefined, { registerOwner: false, preferNewer: true }); }
+        for (const result of records) {
+          if (!result) { failed++; continue; }
+          try { const changed = indexTask(result.record, undefined, { registerOwner: false, preferNewer: true, manifestRecovery: result.manifestRecovery }); if (changed && result.manifestRecovery) recovered++; }
           catch (error) { if (String(error.code || '').startsWith('SQLITE_')) throw error; failed++; }
         }
         processed += records.length;
-        setMeta('legacy-index-status', { status: 'running', processed, total: entries.length, failed });
+        setMeta('legacy-index-status', { status: 'running', processed, total: entries.length, failed, recovered });
       })();
       await yieldEventLoop();
     }
     if (meta('legacy-index-generation') !== generation) return;
     setMeta('task-index-migrated', true);
-    setMeta('legacy-index-status', { status: 'completed', processed, total: entries.length, failed });
+    setMeta('legacy-index-status', { status: 'completed', processed, total: entries.length, failed, recovered });
   })().catch(() => {
     if (meta('legacy-index-generation') === generation) setMeta('legacy-index-status', { ...meta('legacy-index-status', {}), status: 'failed', message: '旧任务索引未完成，请检查工作目录权限后由管理员重新扫描；原文件未修改。' });
   }).finally(() => { if (migration === run) migration = null; });
