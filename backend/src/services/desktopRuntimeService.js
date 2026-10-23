@@ -6,6 +6,7 @@ import { pauseBatchQueue } from './batchQueueService.js';
 import { pauseRunningCollections } from './collectionJobService.js';
 import { getStorageDriver } from '../storage/index.js';
 import { pauseRunningSkuPacks } from './skuPackService.js';
+import { pauseRunningImagePacks } from './imagePackRecoveryService.js';
 
 const recoveryKinds = ['batch', 'image', 'collection-job', 'sku-pack', 'image-pack', 'collection-plan', 'studio', 'listing-dry-run', 'pricing-preview', 'template-fill', 'commerce-sandbox'];
 const recoveryStates = ['queued', 'running', 'waiting_user', 'paused', 'failed', 'partial'];
@@ -69,5 +70,5 @@ export async function pauseAllQueues() {
   const results = await Promise.allSettled(batches.map((batch) => pauseBatchQueue(batch.id)));
   return { requested: batches.length, paused: results.filter((result) => result.status === 'fulfilled').length,
     failed: results.filter((result) => result.status === 'rejected').length,
-    collections: pauseRunningCollections(), skuPacks: pauseRunningSkuPacks(), message: '已请求暂停，正在处理的条目或 SKU 完成后停止。' };
+    collections: pauseRunningCollections(), skuPacks: pauseRunningSkuPacks(), imagePacks: pauseRunningImagePacks(), message: '已请求暂停，正在处理的条目或 SKU 完成后停止。' };
 }

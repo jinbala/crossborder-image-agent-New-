@@ -10,7 +10,7 @@ export function resourceAccess(req, _res, next) {
       [/^\/api\/batches\/([^/]+)(?:\/|$)/, 'batch', new Set(['import-folder', 'analytics'])],
       [/^\/api\/generate\/([^/]+)\/(?:report|three-sample-report)$/, 'image'],
       [/^\/api\/final-acceptance\/real-api\/([^/]+)\/report$/, 'image'],
-      [/^\/api\/workbench\/(?:jobs|sku-packs|template-fills)\/([^/]+)(?:\/|$)/, 'job', new Set(['preview'])],
+      [/^\/api\/workbench\/(?:jobs|sku-packs|image-packs|template-fills)\/([^/]+)(?:\/|$)/, 'job', new Set(['preview'])],
       [/^\/api\/workbench\/collection-jobs\/(collect-job-[A-Za-z0-9_-]+)(?:\/|$)/, 'job'],
       [/^\/api\/workbench\/materials\/([^/]+)(?:\/|$)/, 'material', new Set(['import', 'export.csv'])]
     ];

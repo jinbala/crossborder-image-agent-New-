@@ -1,6 +1,7 @@
 import { useLocale } from '../i18n/LocaleProvider.jsx';
 import { useEffect, useRef, useState } from 'react';
 import { approveSkuResume, skuFinalizationHint } from '../utils/skuPackResume.js';
+import { approveImagePackResume } from '../utils/imagePackResume.js';
 import { approveManifestRepair, manifestRecoveryLabel, canRepairManifest } from '../utils/skuManifestRecovery.js';
 import { approveWorkbenchManifestRepair, canRepairWorkbenchManifest } from '../utils/workbenchManifestRecovery.js';
 import { useParams, Link } from 'react-router-dom';
@@ -21,6 +22,24 @@ export default function JobResultPage() {
   const activeId = useRef(id); activeId.current = id;
   async function load(page = 1) { try { const loaded = await api.getWorkbenchJobDetail(id, page); if (activeId.current !== id) return; setData(loaded); setError(''); } catch (err) { if (activeId.current === id) setError(err.message); } }
   useEffect(() => { setData(null); load(); }, [id]);
+  useEffect(() => {
+    if (data?.type !== 'image-pack' || (!data.recovery?.active && !busy)) return;
+    const timer = setInterval(() => load(), 900); return () => clearInterval(timer);
+  }, [id, data?.type, data?.recovery?.active, busy]);
+  async function resumeImages(retryFailed) {
+    if (resuming.current || !canMakeImages || data?.manifestRead?.readOnly === true) return;
+    resuming.current = true; setBusy(true); setError('');
+    try {
+      const payload = await approveImagePackResume(api, id, retryFailed, t, message => activeId.current === id && window.confirm(message));
+      if (!payload || activeId.current !== id) return;
+      await api.resumeImagePack(id, payload); await load();
+    } catch (err) { if (activeId.current === id) { await load(); if (activeId.current === id) setError(err.message); } }
+    finally { resuming.current = false; setBusy(false); }
+  }
+  async function stopImages(action) {
+    if (!canMakeImages || !window.confirm(t('确认停止图包？当前图片完成后停止，已完成结果保留。'))) return;
+    try { await api.controlImagePack(id, { action, confirm: true }); await load(); } catch (err) { if (activeId.current === id) setError(err.message); }
+  }
   async function resume(retryFailed) {
     if (resuming.current || !canMakeImages) return;
     resuming.current = true;
@@ -54,6 +73,16 @@ export default function JobResultPage() {
   return <div className="space-y-5">
     <h1 className="text-2xl font-semibold">{t("任务结果与追踪")}</h1><ErrorBox error={error} />
     <Link className="text-sm text-mint underline" to="/task-center">{t("返回统一任务中心")}</Link>
+    {data?.type === 'image-pack' && data.recoveryVersion === 1 && <Section title={t('普通图包恢复点')}>
+      <p className="mb-3 text-sm">{t('逐图恢复点已保存；修复清单、继续图片和重试失败项均需分别确认。')}</p>
+      {data.recovery?.active ? <div className="flex gap-3">
+        <button data-image-pack-pause className="btn-secondary" disabled={!canMakeImages} onClick={() => stopImages('pause')}>{t('完成当前图片后暂停')}</button>
+        <button className="btn-secondary" disabled={!canMakeImages} onClick={() => stopImages('cancel')}>{t('取消并保留结果')}</button>
+      </div> : <div className="flex gap-3">
+        <button data-image-pack-resume className="btn-primary" disabled={busy || !canMakeImages || data.manifestRead?.readOnly === true || !(data.summary?.pendingCount > 0 || data.finalizePending === true)} onClick={() => resumeImages(false)}>{t(data.finalizePending && !data.summary?.pendingCount ? '仅重新生成结果包' : '继续未完成图片')}</button>
+        <button data-image-pack-retry className="btn-secondary" disabled={busy || !canMakeImages || data.manifestRead?.readOnly === true || !data.summary?.failedCount} onClick={() => resumeImages(true)}>{t('重试失败图片')}</button>
+      </div>}
+    </Section>}
     {manifestNotice && <section data-manifest-recovery className="space-y-3 rounded border border-amber-300 bg-amber-50 p-4 text-sm"><p>{manifestNotice}</p><p>{data.type === 'sku-pack' ? t('可以下载完整恢复快照；修复清单与继续处理是两个独立操作，均不会自动执行。') : t('可下载完整只读恢复快照；查看和下载不会修复主清单、重做图片或执行任务。')}</p>{data.type === 'collection-job' && <Link data-open-collection-recovery className="btn-secondary inline-flex" to={`/workbench/collection?jobId=${encodeURIComponent(id)}`}>{t('打开采集恢复')}</Link>}{canRepair && <button data-manifest-repair className="btn-secondary" disabled={busy} onClick={repairManifest}>{t('预览并修复主清单')}</button>}</section>}
     {data?.type === 'template-fill' && data.status === 'waiting_user' && <Section title={t("继续确认模板副本回填")}><p className="mb-3 text-sm">{t("预览已持久化，刷新或重启后仍可核对下面的逐格差异。执行仅写入副本，服务端重新检查审批散列和原模板散列。")}</p>{data.blocked?.map((item, index) => <p key={index} className="mb-2 text-sm text-amber-800">{item.ref}：{item.reason === 'FORMULA_PRESERVED' ? t("公式单元格不可覆盖，请重新选择映射或模板") : t("单元格已有内容，请返回素材台账调整规则并重新预览")}</p>)}<button data-template-execute className="btn-primary" disabled={busy || !data.canExecute || !canOperate || data.manifestRead?.readOnly === true} onClick={executeTemplate}>{t("确认差异并生成副本")}</button><Link className="ml-3 text-sm text-mint underline" to="/workbench/materials">{t("返回素材台账调整")}</Link></Section>}
     {data?.type === 'sku-pack' && canOperate && ['running', 'paused'].includes(data.status) && <div className="flex gap-3"><button className="btn-secondary" onClick={() => stop('pause')}>{t("完成当前 SKU 后暂停")}</button><button className="btn-secondary" onClick={() => stop('cancel')}>{t("取消并保留结果")}</button><button className="btn-secondary" onClick={() => load()}>{t("刷新进度")}</button></div>}

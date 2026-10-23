@@ -26,6 +26,7 @@ import { getCollectionJob, pauseCollectionJob } from '../services/collectionJobS
 import { pauseBatchQueue, cancelBatchQueue } from '../services/batchQueueService.js';
 import { createCommerceSandbox, getCommerceSandbox, runCommerceSandbox, stopCommerceSandbox } from '../services/commerceSandboxService.js';
 import { controlSkuPack } from '../services/skuPackService.js';
+import { controlImagePack } from '../services/imagePackRecoveryService.js';
 
 const router = express.Router();
 router.post('/task-index/rebuild', requireRole('admin'), asyncHandler(async (req, res) => {
@@ -110,6 +111,7 @@ router.post('/task-center/:id/actions', requireRole('admin', 'operator'), asyncH
   }
   if (record.kind === 'collection-job') return res.json(await pauseCollectionJob(record.id, req.body.action === 'cancel'));
   if (record.kind === 'sku-pack') return res.json(await controlSkuPack(record.id, req.body.action));
+  if (record.kind === 'image-pack') return res.json(await controlImagePack(record.id, { ...req.body, confirm: req.body.action === 'pause' || req.body.confirm === true }));
   throw fail('此任务不支持队列操作', 409);
 }));
 router.get('/records/:kind', (req, res, next) => { try { res.json(listRecords(req.params.kind, req.query, req.actor)); } catch (error) { next(error); } });

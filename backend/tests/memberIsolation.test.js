@@ -32,6 +32,24 @@ beforeEach(async () => {
 });
 afterEach(() => { process.env.WEB_AUTH_ENABLED = 'false'; });
 
+test('image-pack continuation HTTP enforces session, owner, role, CSRF and actor-bound local approval', async () => {
+  const pack = (await call(alice, 'post', '/api/workbench/image-packs').field('options', JSON.stringify({ format: 'png' })).attach('images', image, 'good.png').attach('images', Buffer.from('broken fixture'), 'bad.png').expect(201)).body;
+  assert.equal(pack.status, 'partial');
+  const route = `/api/workbench/image-packs/${pack.id}`, main = path.join(paths.outputDir, 'workbench', pack.id, 'manifest.json');
+  const first = path.join(path.dirname(main), 'images', pack.items[0].fileName), before = await fs.readFile(first), mtime = (await fs.stat(first)).mtimeMs;
+  await request(app).get(`${route}/resume-preview?retryFailed=true`).expect(401);
+  for (const actor of [bob, viewer]) await call(actor, 'get', `${route}/resume-preview?retryFailed=true`).expect(404);
+  const p = (await call(alice, 'get', `${route}/resume-preview?retryFailed=true`).expect(200)).body;
+  const input = { confirm: true, retryFailed: true, previewHash: p.previewHash }; assert.equal(p.imageCount, 1); assert.equal(p.remote, false);
+  await request(app).post(`${route}/resume`).set('Cookie', alice.cookie).send(input).expect(403);
+  await call(viewer, 'post', `${route}/resume`).send(input).expect(403);
+  await call(bob, 'post', `${route}/resume`).send(input).expect(404);
+  await call(admin, 'post', `${route}/resume`).send(input).expect(409);
+  const result = (await call(alice, 'post', `${route}/resume`).send(input).expect(200)).body;
+  assert.equal(result.status, 'partial'); assert.equal(result.items[1].attempt, 2); assert.equal(result.items[0].attempt, 1);
+  assert.deepEqual(await fs.readFile(first), before); assert.equal((await fs.stat(first)).mtimeMs, mtime);
+});
+
 test('collection repair HTTP preview is owner scoped and mutation requires role, CSRF and bound approval', async () => {
   const job = (await call(alice, 'post', '/api/workbench/collection-jobs/rows').send({ rows: [{ imageUrls: ['https://fixture.invalid/owned.png'] }], options: {} }).expect(201)).body;
   const main = path.join(paths.outputDir, 'workbench', job.id, 'manifest.json');

@@ -19,6 +19,8 @@ const JOB_STATUS_TEXT = {
   paused: '可续跑',
   completed: '已完成',
   completed_with_errors: '完成但有失败',
+  partial: '完成但有失败',
+  cancelled: '已取消',
   planned: '已计划'
 };
 
@@ -72,6 +74,7 @@ function JobRow({ job }) {
           </a>
         )}
         {job.type === 'collection-job' && <a href={`/workbench/collection?jobId=${encodeURIComponent(job.id)}`} className="focus-ring rounded border border-indigo-200 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50">{t("打开/续跑")}</a>}
+        {job.type === 'image-pack' && <a href={`/results/${encodeURIComponent(job.id)}`} className="focus-ring rounded border border-indigo-200 px-2.5 py-1.5 text-xs font-medium text-indigo-700 hover:bg-indigo-50">{t('打开/续跑')}</a>}
         {job.manifestUrl && <a href={`${ASSET_BASE}${job.manifestUrl}`} target="_blank" rel="noreferrer" className="text-slate-400 hover:text-mint" title={t("查看任务清单")}><ExternalLink size={16} /></a>}
       </div>
     </div>
@@ -113,7 +116,7 @@ export default function WorkbenchPage() {
     setPackBusy(true); setError(''); setNotice('');
     try {
       const result = await api.createImagePack(files, packOptions);
-      setNotice(t("图包“{value0}”已完成，共输出 {value1} 张图片。", { value0: (result.name), value1: (result.summary.outputCount) }));
+      setNotice(result.status === 'completed' ? t("图包“{value0}”已完成，共输出 {value1} 张图片。", { value0: (result.name), value1: (result.summary.outputCount) }) : t('图包已保存恢复点：成功 {success}、失败 {failed}、未处理 {pending}；请打开任务详情继续。', { success: result.summary.successCount, failed: result.summary.failedCount, pending: result.summary.pendingCount }));
       setFiles([]); setFileInputKey((value) => value + 1);
       await refresh();
     } catch (err) { setError(err.message); } finally { setPackBusy(false); }

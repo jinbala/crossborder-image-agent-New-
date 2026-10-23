@@ -379,6 +379,7 @@ async function runSmoke() {
   Object.assign(checks, await step('export-reports-i18n', () => require('./export-reports-i18n-smoke.cjs').exportReportsI18nSmoke({ window, origin, dataRoot, requestApi })));
   Object.assign(checks, await step('receiving-workflow', () => require('./receiving-workflow-smoke.cjs').receivingWorkflowSmoke({ window, origin, dataRoot, requestApi })));
   Object.assign(checks, await step('workbench-snapshot', () => require('./workbench-snapshot-smoke.cjs').workbenchSnapshotSmoke({ window, origin, dataRoot, requestApi })));
+  Object.assign(checks, await step('image-pack-recovery', () => require('./image-pack-recovery-smoke.cjs').imagePackRecoverySmoke({ window, origin, dataRoot, requestApi, restartService: async () => { await restartService(); return origin; } })));
   Object.assign(checks, await step('collection-manifest-recovery', () => require('./collection-manifest-recovery-smoke.cjs').collectionManifestRecoverySmoke({ window, origin, dataRoot, requestApi })));
   Object.assign(checks, await step('waiting-recovery', () => require('./waiting-recovery-smoke.cjs').waitingRecoverySmoke({ window, origin, dataRoot, requestApi, restartService: async () => { await restartService(); return origin; } })));
   Object.assign(checks, await step('cold-recovery', () => require('./cold-recovery-smoke.cjs').coldRecoverySmoke({ dataRoot, requestApi, executable: process.execPath, appPath: app.getAppPath(), packaged: app.isPackaged, version: app.getVersion() }), 180000));

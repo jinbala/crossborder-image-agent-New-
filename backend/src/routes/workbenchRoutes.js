@@ -28,12 +28,16 @@ import { createSkuPack, resumeSkuPack, previewSkuPackResume, previewSkuManifestR
 import { readSkuPackSnapshot } from '../services/skuPackStateService.js';
 import { readWorkbenchSnapshot } from '../services/workbenchSnapshotService.js';
 import { previewWorkbenchManifestRepair, repairWorkbenchManifest } from '../services/workbenchManifestRepairService.js';
+import { previewImagePackResume, resumeImagePack, controlImagePack } from '../services/imagePackRecoveryService.js';
 import { parseCollectionSpreadsheet, parseSkuMetadataSpreadsheet } from '../services/collectionSpreadsheetService.js';
 import { createCollectionJob, getCollectionJob, importBrowserImage, runCollectionJob, previewCollectionManifestRepair, repairCollectionManifest } from '../services/collectionJobService.js';
 import { getCollectionDraftContext, stageCollectionDraft, submitCollectionDraft, clearCollectionDraft } from '../services/collectionDraftService.js';
 import { previewCollectionPack, createCollectionPack } from '../services/collectionPackService.js';
 
 const router = express.Router();
+router.get('/image-packs/:id/resume-preview', asyncHandler(async (req, res) => res.set('Cache-Control', 'no-store').json(await previewImagePackResume(req.params.id, { retryFailed: req.query.retryFailed === 'true' }))));
+router.post('/image-packs/:id/resume', asyncHandler(async (req, res) => res.json(await resumeImagePack(req.params.id, req.body || {}))));
+router.post('/image-packs/:id/control', asyncHandler(async (req, res) => res.json(await controlImagePack(req.params.id, req.body || {}))));
 router.get('/jobs/:id/manifest-repair-preview', asyncHandler(async (req, res) => res.set('Cache-Control', 'no-store').json(await previewWorkbenchManifestRepair(req.params.id))));
 router.post('/jobs/:id/repair-manifest', asyncHandler(async (req, res) => res.json(await repairWorkbenchManifest(req.params.id, req.body || {}))));
 const stagingDir = path.join(paths.uploadDir, 'workbench-staging');

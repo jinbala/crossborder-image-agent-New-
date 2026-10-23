@@ -1,7 +1,5 @@
 import fs from 'node:fs/promises';
-import fsSync from 'node:fs';
 import path from 'node:path';
-import archiver from 'archiver';
 import sharp from 'sharp';
 import { nanoid } from 'nanoid';
 import { paths } from './db.js';
@@ -10,6 +8,7 @@ import { platformDb, pageOptions } from './platformStore.js';
 import { assertResource, resourceVisible, ownerSql } from './ownershipService.js';
 import { readSkuPackSnapshot } from './skuPackStateService.js';
 import { readWorkbenchSnapshot, snapshotReadNotice, writeWorkbenchManifest } from './workbenchSnapshotService.js';
+import { createDurableImagePack, imagePackIsActive } from './imagePackRecoveryService.js';
 
 const WORKBENCH_DIR = path.join(paths.outputDir, 'workbench');
 const IMAGE_FORMATS = new Set(['jpeg', 'png', 'webp']);
@@ -91,25 +90,7 @@ async function writeJson(filePath, value) {
   } else await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
-async function createZip(zipPath, imageDir, manifest) {
-  await new Promise((resolve, reject) => {
-    const output = fsSync.createWriteStream(zipPath);
-    const archive = archiver('zip', { zlib: { level: 9 } });
-    output.on('close', resolve);
-    output.on('error', reject);
-    archive.on('error', reject);
-    archive.pipe(output);
-    archive.directory(imageDir, 'images');
-    archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
-    archive.finalize();
-  });
-}
-
-function imageExtension(format) {
-  return format === 'jpeg' ? 'jpg' : format;
-}
-
-async function transformImage(file, outputPath, options) {
+export async function transformImage(file, outputPath, options) {
   const inputMetadata = await sharp(file.path).metadata();
   if (!inputMetadata.width || !inputMetadata.height || !IMAGE_FORMATS.has(inputMetadata.format)) {
     const error = new Error(`不支持的图片：${file.originalname}`);
@@ -163,56 +144,7 @@ export async function createImagePack(files = [], rawOptions = {}) {
     throw error;
   }
 
-  const options = normalizeImagePackOptions(rawOptions);
-  const jobId = `pack-${Date.now()}-${nanoid(6)}`;
-  const jobDir = path.join(WORKBENCH_DIR, jobId);
-  const imageDir = path.join(jobDir, 'images');
-  await fs.mkdir(imageDir, { recursive: true });
-
-  const items = [];
-  const extension = imageExtension(options.format);
-  for (let index = 0; index < files.length; index += 1) {
-    const fileName = `${options.prefix}-${String(index + 1).padStart(3, '0')}.${extension}`;
-    const outputPath = path.join(imageDir, fileName);
-    const metadata = await transformImage(files[index], outputPath, options);
-    items.push({
-      index: index + 1,
-      fileName,
-      url: publicPath(outputPath),
-      ...metadata
-    });
-  }
-
-  const createdAt = nowIso();
-  const manifest = {
-    id: jobId,
-    type: 'image-pack',
-    status: 'completed',
-    name: options.name,
-    createdAt,
-    updatedAt: createdAt,
-    options,
-    summary: {
-      inputCount: files.length,
-      outputCount: items.length,
-      inputBytes: items.reduce((sum, item) => sum + (item.source.bytes || 0), 0),
-      outputBytes: items.reduce((sum, item) => sum + (item.output.bytes || 0), 0)
-    },
-    items
-  };
-  const manifestPath = path.join(jobDir, 'manifest.json');
-  const zipPath = path.join(jobDir, `${jobId}.zip`);
-  await writeJson(manifestPath, manifest);
-  await createZip(zipPath, imageDir, manifest);
-  const zipStats = await fs.stat(zipPath);
-  const completed = {
-    ...manifest,
-    manifestUrl: publicPath(manifestPath),
-    downloadUrl: publicPath(zipPath),
-    zipBytes: zipStats.size
-  };
-  await writeJson(manifestPath, completed);
-  return completed;
+  return createDurableImagePack(files, normalizeImagePackOptions(rawOptions), transformImage);
 }
 
 export async function createCollectionPlan(raw = {}) {
@@ -530,6 +462,7 @@ export async function workbenchJobDetail(id, query = {}) {
       manifestRead: snapshot.source !== 'primary' ? { source: snapshot.source, sourceName: snapshot.sourceName, sourceHash: snapshot.sourceHash, reason: snapshot.reason, readOnly: true, primaryUnchanged: true } : undefined };
   }
   const snapshot = await readWorkbenchSnapshot(id), manifest = snapshot.state;
+  if (manifest.type === 'image-pack' && manifest.recoveryVersion === 1) manifest.recovery = { ...manifest.recovery, active: imagePackIsActive(id) };
   const entries = manifest.items || manifest.rows || manifest.changes || manifest.skuResults?.flatMap((sku) => sku.items.map((item) => ({ sku: sku.sku, ...item }))) || [];
   const { page, pageSize } = pageOptions(query);
   const { items, rows, changes, skuResults, ...summary } = manifest;

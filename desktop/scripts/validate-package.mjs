@@ -21,6 +21,7 @@ required.push('src/zip-lock-diagnostic.cjs');
 required.push('src/sku-manifest-recovery-smoke.cjs', 'runtime/backend/src/services/skuPackStateService.js');
 required.push('src/workbench-snapshot-smoke.cjs', 'runtime/backend/src/services/workbenchSnapshotService.js');
 required.push('runtime/backend/src/services/workbenchManifestRepairService.js', 'runtime/backend/src/services/workbenchMutationService.js');
+required.push('runtime/backend/src/services/imagePackRecoveryService.js', 'src/image-pack-recovery-smoke.cjs');
 required.push('src/collection-manifest-recovery-smoke.cjs', 'runtime/backend/src/services/collectionStateValidation.js');
 required.push('runtime/backend/src/services/supportService.js');
 required.push('runtime/backend/src/services/collectionRequestService.js', 'runtime/backend/src/services/workspaceLifecycle.js');
@@ -71,6 +72,7 @@ sourceFiles.push('src/report-details-i18n-smoke.cjs');
 sourceFiles.push('src/zip-lock-diagnostic.cjs');
 sourceFiles.push('src/sku-manifest-recovery-smoke.cjs');
 sourceFiles.push('src/workbench-snapshot-smoke.cjs', 'runtime/backend/src/services/workbenchSnapshotService.js');
+sourceFiles.push('src/image-pack-recovery-smoke.cjs');
 sourceFiles.push('src/collection-manifest-recovery-smoke.cjs');
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const sourceMismatch = sourceFiles.filter((file) => {

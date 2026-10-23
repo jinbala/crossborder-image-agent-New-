@@ -8,6 +8,16 @@ import { batchReports } from './batchReports.js';
 import { exportReports } from './exportReports.js';
 import { reportDetails } from './reportDetails.js';
 export const english = {
+  '图包恢复范围无效或正在运行，请刷新后重新预览。': 'The image-pack recovery scope is invalid or busy. Refresh and preview again.',
+  '已确认原进程退出，是否保留中断锁副本并恢复？未知或仍在运行的锁不会被移除。': 'The original process has exited. Preserve its interrupted lock and resume? Unknown or live locks are never removed.',
+  '确认继续 {count} 张未完成图片？已完成图片不会重做；本次仅使用本地 Sharp，不上传图片。': 'Resume {count} unfinished images? Completed images stay unchanged. Only local Sharp is used; no images are uploaded.',
+  '确认停止图包？当前图片完成后停止，已完成结果保留。': 'Stop this image pack after the current image? Completed results will be kept.',
+  '普通图包恢复点': 'Image-pack checkpoint',
+  '逐图恢复点已保存；修复清单、继续图片和重试失败项均需分别确认。': 'Per-image checkpoints are saved. Manifest repair, continuation and failed-image retries need separate approval.',
+  '完成当前图片后暂停': 'Pause after the current image',
+  '继续未完成图片': 'Continue unfinished images',
+  '重试失败图片': 'Retry failed images',
+  '图包已保存恢复点：成功 {success}、失败 {failed}、未处理 {pending}；请打开任务详情继续。': 'Image-pack checkpoint saved: {success} succeeded, {failed} failed, {pending} unprocessed. Open the task to continue.',
   '查看已保存的预览或计划，核对后手动确认；不会自动执行': 'Review the saved preview or plan and confirm manually. Nothing runs automatically.',
   '从 SKU 恢复点继续，已完成 SKU 不重复': 'Resume from the SKU checkpoint without repeating completed SKUs.',
   '选择断点继续或重试失败商品': 'Resume from a checkpoint or retry failed products.',
