@@ -40,7 +40,7 @@ test('generic result archive fallback paginates display but downloads exact full
   await fs.writeFile(main, '{broken primary'); const before = await fs.stat(zip.file), zipBytes = await fs.readFile(zip.file), names = await fs.readdir(value.directory);
   const detail = (await request(app).get(`/api/workbench/jobs/${state.id}?page=2&pageSize=30`).expect(200)).body;
   assert.equal(detail.pagination.total, 45); assert.equal(detail.entries.length, 15); assert.equal(detail.entries[0].sku, 'SKU-30');
-  assert.equal(detail.manifestRead.source, 'archive'); assert.equal(detail.manifestRead.canRepair, false); assert.equal(detail.manifestRead.primaryUnchanged, true);
+  assert.equal(detail.manifestRead.source, 'archive'); assert.equal(detail.manifestRead.canRepair, true); assert.equal(detail.manifestRead.primaryUnchanged, true);
   const download = await request(app).get(detail.manifestUrl).expect(200);
   assert.equal(download.text, zip.bytes.toString()); assert.equal(JSON.parse(download.text).items.length, 45);
   assert.equal(download.headers['cache-control'], 'no-store'); assert.match(download.headers['content-disposition'], /attachment/);

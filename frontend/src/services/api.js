@@ -98,6 +98,8 @@ export const api = {
   skuPackManifestUrl: id => `${API_BASE}/workbench/sku-packs/${encodeURIComponent(id)}/manifest`,
   workbenchManifestUrl: id => `${API_BASE}/workbench/jobs/${encodeURIComponent(id)}/manifest`,
   previewSkuManifestRepair: id => request(`/workbench/sku-packs/${encodeURIComponent(id)}/manifest-repair-preview`),
+  previewWorkbenchManifestRepair: id => request(`/workbench/jobs/${encodeURIComponent(id)}/manifest-repair-preview`),
+  repairWorkbenchManifest: (id, payload) => request(`/workbench/jobs/${encodeURIComponent(id)}/repair-manifest`, { method: 'POST', body: JSON.stringify(payload) }),
   repairSkuManifest: (id, payload) => request(`/workbench/sku-packs/${encodeURIComponent(id)}/repair-manifest`, { method: 'POST', body: JSON.stringify(payload) }),
     resumeSkuPack: (id, payload) => request(`/workbench/sku-packs/${encodeURIComponent(id)}/resume`, { method: 'POST', body: JSON.stringify(payload) }),
     previewSkuPackResume: (id, retryFailed = false) => request(`/workbench/sku-packs/${encodeURIComponent(id)}/resume-preview?retryFailed=${retryFailed === true}`),

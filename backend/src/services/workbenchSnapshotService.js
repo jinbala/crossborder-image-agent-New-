@@ -7,6 +7,7 @@ import { paths } from './dbPaths.js';
 import { assertResource } from './ownershipService.js';
 import { atomicRename } from '../utils/atomicRename.js';
 import { validateCollectionState } from './collectionStateValidation.js';
+import { withWorkbenchMutation } from './workbenchMutationService.js';
 
 const ROOT = path.join(paths.outputDir, 'workbench');
 const LIMIT = 128 * 1024 * 1024;
@@ -86,7 +87,7 @@ const newer = (candidate, previous) => {
 };
 
 export function snapshotReadNotice(snapshot) {
-  return snapshot.source === 'primary' ? undefined : { source: snapshot.source, sourceName: snapshot.sourceName, sourceHash: snapshot.sourceHash, reason: snapshot.reason, readOnly: true, primaryUnchanged: true, canRepair: false };
+  return snapshot.source === 'primary' ? undefined : { source: snapshot.source, sourceName: snapshot.sourceName, sourceHash: snapshot.sourceHash, reason: snapshot.reason, readOnly: true, primaryUnchanged: true, canRepair: snapshot.state.type !== 'collection-job' };
 }
 
 export async function readWorkbenchSnapshot(id) {
@@ -132,13 +133,17 @@ export async function writeWorkbenchManifest(state) {
   if (bytes.length > LIMIT) throw failure('任务清单超过保存上限，未覆盖原文件', 'WORKBENCH_STATE_SIZE');
   parse(bytes, state.id);
   const directory = await directoryFor(state.id, false), suffix = randomUUID();
-  const names = ['manifest.json', state.type === 'collection-job' ? 'manifest.backup.json' : 'manifest.json.backup'];
-  for (const name of names) {
-    try { await readFile(directory, name); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  }
-  for (const name of names) {
-    const temporary = path.join(directory, `${name}.${suffix}.tmp`);
-    try { await fs.writeFile(temporary, bytes, { flag: 'wx' }); await atomicRename(temporary, path.join(directory, name)); }
-    finally { await fs.rm(temporary, { force: true }).catch(() => {}); }
-  }
+  const write = async () => {
+    const names = ['manifest.json', state.type === 'collection-job' ? 'manifest.backup.json' : 'manifest.json.backup'];
+    for (const name of names) {
+      try { await readFile(directory, name); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    for (const name of names) {
+      const temporary = path.join(directory, `${name}.${suffix}.tmp`);
+      try { await fs.writeFile(temporary, bytes, { flag: 'wx' }); await atomicRename(temporary, path.join(directory, name)); }
+      finally { await fs.rm(temporary, { force: true }).catch(() => {}); }
+    }
+  };
+  if (state.type === 'collection-job') return write(); // Has its own durable run.lock protocol.
+  return withWorkbenchMutation(state.id, directory, write, { manifestWrite: true });
 }

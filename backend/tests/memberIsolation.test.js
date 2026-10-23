@@ -71,6 +71,27 @@ test('generic recovered manifests enforce HTTP session ownership and permit only
   assert.equal(await fs.readFile(main, 'utf8'), '{private damaged primary'); await assert.rejects(fs.stat(viewerMain), { code: 'ENOENT' });
 });
 
+test('generic repair HTTP requires member ownership, operator role, CSRF and actor-bound approval', async () => {
+  const plan = (await call(alice, 'post', '/api/workbench/collection-plans').send({ urls: ['https://fixture.invalid/repair'] }).expect(201)).body;
+  const main = path.join(paths.outputDir, 'workbench', plan.id, 'manifest.json'); await fs.writeFile(main, '{generic-owned-damage');
+  const route = `/api/workbench/jobs/${plan.id}`;
+  await request(app).get(`${route}/manifest-repair-preview`).expect(401);
+  await call(bob, 'get', `${route}/manifest-repair-preview`).expect(404);
+  const preview = (await call(alice, 'get', `${route}/manifest-repair-preview`).expect(200)).body;
+  const payload = { confirm: true, previewHash: preview.previewHash, sourceHash: preview.sourceHash };
+  await request(app).post(`${route}/repair-manifest`).set('Cookie', alice.cookie).send(payload).expect(403);
+  await call(viewer, 'post', `${route}/repair-manifest`).send(payload).expect(403);
+  await call(bob, 'post', `${route}/repair-manifest`).send(payload).expect(404);
+  await call(admin, 'post', `${route}/repair-manifest`).send(payload).expect(409);
+  const viewerPlan = await withActor(viewer, () => createCollectionPlan({ urls: ['https://fixture.invalid/viewer'] }));
+  const viewerMain = path.join(paths.outputDir, 'workbench', viewerPlan.id, 'manifest.json'); await fs.writeFile(viewerMain, '{viewer-damage');
+  await call(viewer, 'get', `/api/workbench/jobs/${viewerPlan.id}/manifest-repair-preview`).expect(403);
+  assert.equal(await fs.readFile(main, 'utf8'), '{generic-owned-damage');
+  const result = (await call(alice, 'post', `${route}/repair-manifest`).send(payload).expect(200)).body;
+  assert.equal(result.repaired, true); assert.equal(JSON.parse(await fs.readFile(main)).status, 'planned');
+  assert.equal(await fs.readFile(path.join(path.dirname(main), result.preservedDamaged), 'utf8'), '{generic-owned-damage');
+});
+
 test('Web collection drafts require member identity, CSRF and ownership, without exposing another member payload', async () => {
   const route = '/api/workbench/collection-drafts';
   const context = (await call(alice, 'get', route).expect(200)).body;

@@ -21,10 +21,10 @@ async function workbenchSnapshotSmoke({ window, origin, dataRoot, requestApi }) 
   await fs.writeFile(main, '{snapshot smoke interrupted primary'); const names = await fs.readdir(directory);
   await window.loadURL(`${origin}/results/${plan.id}`);
   await wait(window, `document.querySelector('[data-manifest-recovery]')&&document.querySelector('[data-result-manifest]')`);
-  checks.genericReadOnlyBackupVisible = await window.webContents.executeJavaScript(`!document.querySelector('[data-manifest-repair]')&&document.querySelector('[data-manifest-recovery]').innerText.includes('不会修复主清单')`);
+  checks.genericReadOnlyBackupVisible = await window.webContents.executeJavaScript(`!!document.querySelector('[data-manifest-repair]')&&document.querySelector('[data-manifest-recovery]').innerText.includes('不会修复主清单')`);
   await window.webContents.executeJavaScript(`(()=>{const select=document.querySelector('[aria-label="Interface language / 界面语言"]');select.value='en-US';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await wait(window, `document.querySelector('[data-manifest-recovery]').innerText.includes('never repair the primary manifest')`);
-  checks.genericReadOnlyNoticeLocalized = await window.webContents.executeJavaScript(`document.querySelector('[data-result-manifest]').innerText==='Download full manifest'&&!document.querySelector('[data-manifest-repair]')`);
+  checks.genericReadOnlyNoticeLocalized = await window.webContents.executeJavaScript(`document.querySelector('[data-result-manifest]').innerText==='Download full manifest'&&document.querySelector('[data-manifest-repair]').innerText==='Preview and repair primary manifest'`);
   const destination = path.join(root, 'generic-recovered-manifest.json');
   const saved = new Promise((resolve, reject) => {
     const timer = setTimeout(() => { window.webContents.session.removeListener('will-download', save); reject(new Error('Snapshot download timed out')); }, 15000);
@@ -35,6 +35,14 @@ async function workbenchSnapshotSmoke({ window, origin, dataRoot, requestApi }) 
   checks.genericFullSnapshotDownloaded = (await fs.readFile(destination)).equals(backup);
   await require('./smoke-screenshot.cjs').smokeScreenshot(window, path.join(root, 'generic-snapshot-readonly-english.png'), { selector: '[data-manifest-recovery]' });
   checks.genericReadDoesNotRepair = await fs.readFile(main, 'utf8') === '{snapshot smoke interrupted primary' && JSON.stringify(await fs.readdir(directory)) === JSON.stringify(names);
+  await window.webContents.executeJavaScript(`window.__repairConfirmCalls=0;window.confirm=()=>{window.__repairConfirmCalls++;return false;};document.querySelector('[data-manifest-repair]').click();void 0`);
+  await wait(window, `window.__repairConfirmCalls===1&&!document.querySelector('[data-manifest-repair]').disabled`);
+  checks.genericRepairCancelPreservesFiles = await fs.readFile(main, 'utf8') === '{snapshot smoke interrupted primary' && JSON.stringify(await fs.readdir(directory)) === JSON.stringify(names);
+  await window.webContents.executeJavaScript(`window.confirm=()=>true;document.querySelector('[data-manifest-repair]').click();void 0`);
+  await wait(window, `!document.querySelector('[data-manifest-recovery]')&&!!document.querySelector('[data-result-manifest]')`);
+  const preserved = (await fs.readdir(directory)).filter(name => name.startsWith('manifest.json.damaged-'));
+  checks.genericRepairApprovedOnlyManifest = (await fs.readFile(main)).equals(backup) && (await fs.readFile(`${main}.backup`)).equals(backup) && preserved.length === 1 && await fs.readFile(path.join(directory, preserved[0]), 'utf8') === '{snapshot smoke interrupted primary';
+  checks.genericRepairDoesNotRunPlan = JSON.parse(await fs.readFile(main)).status === plan.status && !(await fs.readdir(directory)).some(name => name.endsWith('.zip') || name.endsWith('.lock') || name.endsWith('.tmp'));
   const png = await require('sharp')({ create: { width: 48, height: 32, channels: 3, background: '#506080' } }).png().toBuffer(), form = new FormData();
   form.append('images', new Blob([png], { type: 'image/png' }), 'local-fixture.png'); form.append('options', JSON.stringify({ format: 'png' }));
   const pack = await json('/api/workbench/image-packs', { method: 'POST', body: form });
@@ -42,9 +50,13 @@ async function workbenchSnapshotSmoke({ window, origin, dataRoot, requestApi }) 
   const packDirectory = path.join(root, 'outputs', 'workbench', pack.id), zipPath = path.join(packDirectory, `${pack.id}.zip`), zipBytes = await fs.readFile(zipPath), zipMtime = (await fs.stat(zipPath)).mtimeMs;
   await fs.writeFile(path.join(packDirectory, 'manifest.json'), '{pack snapshot smoke interrupted');
   const detail = await json(`/api/workbench/jobs/${pack.id}`), response = await requestApi(`/api/workbench/jobs/${pack.id}/manifest`);
-  checks.genericArchiveReadOnlySnapshot = detail.manifestRead?.source === 'archive' && detail.manifestRead?.canRepair === false && detail.pagination.total === 1;
+  checks.genericArchiveReadOnlySnapshot = detail.manifestRead?.source === 'archive' && detail.manifestRead?.canRepair === true && detail.pagination.total === 1;
   checks.genericArchiveExactDownload = response.ok && Buffer.from(await response.arrayBuffer()).equals(new AdmZip(zipBytes).getEntry('manifest.json').getData());
   checks.genericArchiveUnchanged = hash(await fs.readFile(zipPath)) === hash(zipBytes) && (await fs.stat(zipPath)).mtimeMs === zipMtime && await fs.readFile(path.join(packDirectory, 'manifest.json'), 'utf8') === '{pack snapshot smoke interrupted';
+  const repairPreview = await json(`/api/workbench/jobs/${pack.id}/manifest-repair-preview`);
+  const repair = await json(`/api/workbench/jobs/${pack.id}/repair-manifest`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirm: true, previewHash: repairPreview.previewHash, sourceHash: repairPreview.sourceHash }) });
+  checks.genericArchiveRepairExact = repair.repaired === true && repair.imagesProcessed === 0 && (await fs.readFile(path.join(packDirectory, 'manifest.json'))).equals(new AdmZip(zipBytes).getEntry('manifest.json').getData());
+  checks.genericArchiveRepairKeepsZip = hash(await fs.readFile(zipPath)) === hash(zipBytes) && (await fs.stat(zipPath)).mtimeMs === zipMtime;
   await window.webContents.executeJavaScript(`(()=>{const select=document.querySelector('[aria-label="Interface language / 界面语言"]');select.value='zh-CN';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   return checks;
 }

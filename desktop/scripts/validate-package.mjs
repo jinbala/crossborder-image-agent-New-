@@ -20,6 +20,7 @@ required.push('runtime/backend/src/utils/atomicRename.js');
 required.push('src/zip-lock-diagnostic.cjs');
 required.push('src/sku-manifest-recovery-smoke.cjs', 'runtime/backend/src/services/skuPackStateService.js');
 required.push('src/workbench-snapshot-smoke.cjs', 'runtime/backend/src/services/workbenchSnapshotService.js');
+required.push('runtime/backend/src/services/workbenchManifestRepairService.js', 'runtime/backend/src/services/workbenchMutationService.js');
 required.push('src/collection-manifest-recovery-smoke.cjs', 'runtime/backend/src/services/collectionStateValidation.js');
 required.push('runtime/backend/src/services/supportService.js');
 required.push('runtime/backend/src/services/collectionRequestService.js', 'runtime/backend/src/services/workspaceLifecycle.js');

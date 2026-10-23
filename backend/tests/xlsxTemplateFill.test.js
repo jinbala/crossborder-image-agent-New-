@@ -8,6 +8,7 @@ import request from 'supertest';
 import app from '../src/app.js';
 import { paths } from '../src/services/db.js';
 import { planWorkbookFill, previewTemplateFill, executeTemplateFill } from '../src/services/xlsxTemplateFillService.js';
+import { previewWorkbenchManifestRepair, repairWorkbenchManifest } from '../src/services/workbenchManifestRepairService.js';
 
 const cleanup = [];
 afterEach(async () => { for (const target of cleanup.splice(0)) await fs.rm(target, { recursive: true, force: true }); });
@@ -56,6 +57,22 @@ test('fill preview protects formulas and occupied cells, and validates mapping',
   assert.equal(result.sheet, sheet);
   const occupied = planWorkbookFill(sheet.replace('<c r="C2" s="1"/>', '<c r="A2" t="inlineStr"><is><t>old</t></is></c>'), [{ sku: 'new' }], { sku: 0 }, { startRow: 2 });
   assert.equal(occupied.blocked[0].reason, 'CELL_NOT_EMPTY');
+});
+
+test('recovered template needs explicit manifest repair and a separate execution approval', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'xlsx-repair-')); cleanup.push(directory);
+  const source = path.join(directory, 'template.xlsx'), sourceBytes = workbook().toBuffer(); await fs.writeFile(source, sourceBytes);
+  const preview = await previewTemplateFill(source, { platformId: 'amazon', records: [{ sku: 'REPAIR', title: 'original title', price: 12, stock: 4, mainImageUrl: 'https://example.com/image.png' }] });
+  const outputDir = path.join(paths.outputDir, 'workbench', preview.id); cleanup.push(outputDir);
+  const main = path.join(outputDir, 'manifest.json'); await fs.writeFile(main, '{interrupted-template');
+  const execute = { confirm: true, previewHash: preview.previewHash };
+  await assert.rejects(executeTemplateFill(preview.id, execute), { code: 'WORKBENCH_REPAIR_REQUIRED' });
+  await assert.rejects(fs.stat(path.join(outputDir, 'filled-template.xlsx')), { code: 'ENOENT' });
+  const approved = await previewWorkbenchManifestRepair(preview.id);
+  await repairWorkbenchManifest(preview.id, { confirm: true, previewHash: approved.previewHash, sourceHash: approved.sourceHash });
+  assert.equal(JSON.parse(await fs.readFile(main)).status, 'waiting_user');
+  await assert.rejects(fs.stat(path.join(outputDir, 'filled-template.xlsx')), { code: 'ENOENT' });
+  assert.equal((await executeTemplateFill(preview.id, execute)).status, 'completed'); assert.deepEqual(await fs.readFile(source), sourceBytes);
 });
 
 test('fill creates ordered new rows and rejects invalid mappings and protected worksheets', () => {

@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
-import { writeWorkbenchManifest } from './workbenchSnapshotService.js';
+import { writeWorkbenchManifest, readWorkbenchSnapshot, workbenchSnapshotDirectory } from './workbenchSnapshotService.js';
+import { withWorkbenchMutation } from './workbenchMutationService.js';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import AdmZip from 'adm-zip';
@@ -176,7 +177,13 @@ export function executeTemplateFill(id, options = {}) {
   if (options.confirm !== true) return Promise.reject(fail('请确认模板回填差异后再执行'));
   const key = `${id}:${options.previewHash}`;
   if (executions.has(key)) return executions.get(key);
-  const operation = performTemplateFill(id, options).finally(() => executions.delete(key));
+  const operation = (async () => {
+    const directory = await workbenchSnapshotDirectory(id);
+    return withWorkbenchMutation(id, directory, async () => {
+      if ((await readWorkbenchSnapshot(id)).source !== 'primary') throw Object.assign(fail('请先预览并修复主清单，再单独确认模板回填', 409), { code: 'WORKBENCH_REPAIR_REQUIRED' });
+      return performTemplateFill(id, options);
+    }, { allowManifestWrite: true });
+  })().finally(() => executions.delete(key));
   executions.set(key, operation);
   return operation;
 }

@@ -40,9 +40,18 @@ async function waitingRecoverySmoke({ window, origin, dataRoot, requestApi, rest
   checks.waitingRecoveryReadsPreservePreview = before.equals(await fs.readFile(primary)) && (await json(`/api/platform/commerce-sandbox/${sandbox.id}`)).version === sandbox.version;
   checks.waitingRecoveryNoAutomaticOutput = await fs.access(path.join(directory, 'filled-template.xlsx')).then(() => false, error => error.code === 'ENOENT');
   await require('./smoke-screenshot.cjs').smokeScreenshot(window, path.join(root, 'waiting-recovery-english.png'), { selector: `[data-recovery-id="${template.id}"]` });
+  await fs.writeFile(primary, '{interrupted-template-smoke');
   await window.webContents.executeJavaScript(`document.querySelector('[data-recovery-id="${template.id}"] a').click()`);
   await wait(`document.body.innerText.includes('Continue workbook-copy approval') && document.body.innerText.includes('WAIT-RECOVERY')`);
   checks.waitingRecoveryTemplateLink = true;
+  await wait(`!!document.querySelector('[data-manifest-repair]')&&document.querySelector('[data-template-execute]')?.disabled`);
+  checks.waitingRecoveryTemplateBlocksReadOnly = true;
+  await window.webContents.executeJavaScript(`window.__templateRepairConfirm=0;window.confirm=()=>{window.__templateRepairConfirm++;return false;};document.querySelector('[data-manifest-repair]').click();void 0`);
+  await wait(`window.__templateRepairConfirm===1&&!document.querySelector('[data-manifest-repair]').disabled`);
+  checks.waitingRecoveryTemplateRepairCancelSafe = await fs.readFile(primary, 'utf8') === '{interrupted-template-smoke';
+  await window.webContents.executeJavaScript(`window.confirm=()=>true;document.querySelector('[data-manifest-repair]').click();void 0`);
+  await wait(`!document.querySelector('[data-manifest-recovery]')&&!document.querySelector('[data-template-execute]')?.disabled`);
+  checks.waitingRecoveryTemplateRepairedNotExecuted = before.equals(await fs.readFile(primary)) && await fs.access(path.join(directory, 'filled-template.xlsx')).then(() => false, error => error.code === 'ENOENT');
   await window.webContents.executeJavaScript('window.confirm=()=>false;void 0'); await click('Approve changes & create copy');
   checks.waitingRecoveryTemplateCancelSafe = before.equals(await fs.readFile(primary));
   await window.webContents.executeJavaScript('window.confirm=()=>true;void 0'); await click('Approve changes & create copy');

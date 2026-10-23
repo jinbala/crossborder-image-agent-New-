@@ -27,12 +27,15 @@ import { previewTemplateFill, executeTemplateFill } from '../services/xlsxTempla
 import { createSkuPack, resumeSkuPack, previewSkuPackResume, previewSkuManifestRepair, repairSkuManifest } from '../services/skuPackService.js';
 import { readSkuPackSnapshot } from '../services/skuPackStateService.js';
 import { readWorkbenchSnapshot } from '../services/workbenchSnapshotService.js';
+import { previewWorkbenchManifestRepair, repairWorkbenchManifest } from '../services/workbenchManifestRepairService.js';
 import { parseCollectionSpreadsheet, parseSkuMetadataSpreadsheet } from '../services/collectionSpreadsheetService.js';
 import { createCollectionJob, getCollectionJob, importBrowserImage, runCollectionJob, previewCollectionManifestRepair, repairCollectionManifest } from '../services/collectionJobService.js';
 import { getCollectionDraftContext, stageCollectionDraft, submitCollectionDraft, clearCollectionDraft } from '../services/collectionDraftService.js';
 import { previewCollectionPack, createCollectionPack } from '../services/collectionPackService.js';
 
 const router = express.Router();
+router.get('/jobs/:id/manifest-repair-preview', asyncHandler(async (req, res) => res.set('Cache-Control', 'no-store').json(await previewWorkbenchManifestRepair(req.params.id))));
+router.post('/jobs/:id/repair-manifest', asyncHandler(async (req, res) => res.json(await repairWorkbenchManifest(req.params.id, req.body || {}))));
 const stagingDir = path.join(paths.uploadDir, 'workbench-staging');
 const storage = multer.diskStorage({
   destination: (_req, _file, callback) => {
