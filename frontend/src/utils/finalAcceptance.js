@@ -1,3 +1,4 @@
+import { reportDisplayLabel, reportUi } from './reportDisplayLabels.js';
 const SECRET_PATTERNS = [
   [/[A-Z]:\\[^\s"',，。；;]+/gi, '[local path removed]'],
   [/\b[\w.-]*\.sqlite\b/gi, '[sqlite path removed]'],
@@ -243,15 +244,16 @@ export function deleteFinalAcceptanceIssue(report = {}, issueId = '') {
   });
 }
 
-function issueText(items = []) {
+function issueText(items = [], t) {
+  const ui = reportUi(t);
   return asArray(items)
     .map((item) => {
       if (typeof item === 'string') return safeText(item);
       const detail = item.code === 'MISSING_TEST_ASSET'
         ? [
-          item.targetSkuCount !== undefined ? `目标 SKU 数: ${item.targetSkuCount}` : '',
-          item.availableSkuCount !== undefined ? `可用 SKU 数: ${item.availableSkuCount}` : '',
-          item.missingSkuCount !== undefined ? `缺失 SKU 数: ${item.missingSkuCount}` : ''
+          item.targetSkuCount !== undefined ? ui('目标 SKU 数: {count}', { count: item.targetSkuCount }) : '',
+          item.availableSkuCount !== undefined ? ui('可用 SKU 数: {count}', { count: item.availableSkuCount }) : '',
+          item.missingSkuCount !== undefined ? ui('缺失 SKU 数: {count}', { count: item.missingSkuCount }) : ''
         ].filter(Boolean).join(' / ')
         : '';
       return [item.code, item.sku, item.message, detail].filter(Boolean).map(safeText).join(' - ');
@@ -260,20 +262,21 @@ function issueText(items = []) {
     .join(' / ');
 }
 
-function stepSummary(steps = []) {
+function stepSummary(steps = [], t) {
   const counts = asArray(steps).reduce((acc, step) => {
     const key = step.status || 'pending';
     acc[key] = (acc[key] || 0) + 1;
     return acc;
-  }, {});
-  return Object.entries(counts).map(([key, value]) => `${key}: ${value}`).join(' / ') || 'pending: 0';
+  }, Object.create(null));
+  return Object.entries(counts).map(([key, value]) => `${reportDisplayLabel('status', key, t)}: ${value}`).join(' / ') || `${reportDisplayLabel('status', 'pending', t)}: 0`;
 }
 
-export function getFinalAcceptanceDisplayModel(report) {
+export function getFinalAcceptanceDisplayModel(report, t) {
+  const ui = reportUi(t), label = (kind, value) => reportDisplayLabel(kind, value, t);
   if (!report) {
     return {
-      emptyText: '暂无最终验收报告。请先生成验收模板，或根据当前数据预填验收报告。',
-      notice: finalAcceptanceNotice,
+      emptyText: ui('暂无最终验收报告。请先生成验收模板，或根据当前数据预填验收报告。'),
+      notice: ui(finalAcceptanceNotice),
       summaryCards: [],
       skuRows: [],
       moduleRows: [],
@@ -292,38 +295,40 @@ export function getFinalAcceptanceDisplayModel(report) {
   const issueSummary = safe.issueSummary || emptyIssueSummary();
   return {
     emptyText: '',
-    notice: finalAcceptanceNotice,
+    notice: ui(finalAcceptanceNotice),
     summaryCards: [
       { label: '总 SKU', value: String(summary.totalSku || 0) },
       { label: '已通过', value: String(summary.passedSku || 0) },
       { label: '失败', value: String(summary.failedSku || 0) },
       { label: '待验收', value: String(summary.pendingSku || 0) },
       { label: '阻断项', value: String(summary.blockedSku || 0) },
-      { label: 'overallStatus', value: String(summary.overallStatus || 'pending') },
-      { label: 'readinessLevel', value: String(summary.readinessLevel || 'local-workbench') }
-    ],
+      { label: t ? ui('总体状态') : 'overallStatus', value: label('status', String(summary.overallStatus || 'pending')) },
+      { label: t ? ui('就绪级别') : 'readinessLevel', value: label('readiness', String(summary.readinessLevel || 'local-workbench')) }
+    ].map(card => ({ ...card, label: ui(card.label) })),
     skuRows: asArray(safe.skuAcceptance).map((item) => ({
       ...item,
-      stepSummary: stepSummary(item.steps),
-      riskText: Object.entries(item.riskSummary || {}).map(([key, value]) => `${key}: ${value}`).join(' / ') || 'unknown'
+      testAssetStatusLabel: label('status', item.testAssetStatus),
+      overallStatusLabel: label('status', item.overallStatus),
+      stepSummary: stepSummary(item.steps, t),
+      riskText: Object.entries(item.riskSummary || {}).map(([key, value]) => `${label('riskKey', key)}: ${label('severity', value)}`).join(' / ') || label('quality', 'unknown')
     })),
-    moduleRows: asArray(safe.moduleAcceptance),
-    batchRows: asArray(safe.batchAcceptance),
+    moduleRows: asArray(safe.moduleAcceptance).map(item => ({ ...item, statusLabel: label('status', item.status), moduleNameLabel: label('module', item.moduleKey) === item.moduleKey ? item.moduleName || item.moduleKey : label('module', item.moduleKey) })),
+    batchRows: asArray(safe.batchAcceptance).map(item => ({ ...item, statusLabel: label('status', item.status || 'pending') })),
     issueRows: asArray(safe.issueLogs),
     issueSummaryCards: [
-      { label: 'totalIssues', value: String(issueSummary.totalIssues || 0) },
-      { label: 'blocker', value: String(issueSummary.blockerCount || 0) },
-      { label: 'high', value: String(issueSummary.highCount || 0) },
-      { label: 'medium', value: String(issueSummary.mediumCount || 0) },
-      { label: 'low', value: String(issueSummary.lowCount || 0) },
-      { label: 'info', value: String(issueSummary.infoCount || 0) },
-      { label: 'blockingFinalRelease', value: String(issueSummary.blockingFinalReleaseCount || 0) }
+      { label: t ? ui('问题总数') : 'totalIssues', value: String(issueSummary.totalIssues || 0) },
+      { label: label('severity', 'blocker'), value: String(issueSummary.blockerCount || 0) },
+      { label: label('severity', 'high'), value: String(issueSummary.highCount || 0) },
+      { label: label('severity', 'medium'), value: String(issueSummary.mediumCount || 0) },
+      { label: label('severity', 'low'), value: String(issueSummary.lowCount || 0) },
+      { label: label('severity', 'info'), value: String(issueSummary.infoCount || 0) },
+      { label: t ? ui('阻断发布问题') : 'blockingFinalRelease', value: String(issueSummary.blockingFinalReleaseCount || 0) }
     ],
     issueBlockingText: issueSummary.blockingFinalReleaseCount > 0
-      ? `open blocker issues: ${issueSummary.blockingFinalReleaseCount}`
+      ? t ? ui('未解决的发布阻断问题：{count}', { count: issueSummary.blockingFinalReleaseCount }) : `open blocker issues: ${issueSummary.blockingFinalReleaseCount}`
       : '',
-    blockingText: issueText(safe.blockingIssues),
-    warningText: issueText(safe.warnings),
+    blockingText: issueText(safe.blockingIssues, t),
+    warningText: issueText(safe.warnings, t),
     recommendationText: asArray(safe.recommendations).map(safeText).join(' / '),
     nextSuggestedAction: safeText(safe.nextSuggestedAction || '')
   };
@@ -459,10 +464,11 @@ export function canRunRealApiAcceptance(input = {}) {
   return Boolean(payload.taskId && payload.confirmRealApi && payload.confirmPaidApi && payload.confirmNoPlatformUpload);
 }
 
-export function getRealApiAcceptanceDisplayModel(report) {
+export function getRealApiAcceptanceDisplayModel(report, t) {
+  const ui = reportUi(t);
   if (!report) {
     return {
-      emptyText: '暂无 1 SKU 真实 API 验收报告。请先选择 1 个 taskId，并勾选确认后运行。',
+      emptyText: ui('暂无 1 SKU 真实 API 验收报告。请先选择 1 个 taskId，并勾选确认后运行。'),
       summaryCards: [],
       apiCallRows: [],
       generatedRows: [],
@@ -475,17 +481,17 @@ export function getRealApiAcceptanceDisplayModel(report) {
   return {
     emptyText: '',
     summaryCards: [
-      { label: '状态', value: String(summary.overallStatus || 'pending') },
+      { label: '状态', value: reportDisplayLabel('status', String(summary.overallStatus || 'pending'), t) },
       { label: 'API 调用次数', value: String(summary.realApiCallCount || 0) },
       { label: '真实识别', value: String(summary.realVisionCallCount || 0) },
       { label: '真实生图', value: String(summary.realImageGenerationCallCount || 0) },
       { label: '真实审核', value: String(summary.realReviewCallCount || 0) },
       { label: 'fallback', value: String(summary.fallbackCount || 0) },
       { label: '预估成本', value: String(summary.estimatedCost || 0) }
-    ],
+    ].map(card => ({ ...card, label: ui(card.label) })),
     apiCallRows: asArray(safe.apiCalls),
     generatedRows: asArray(safe.generatedOutputs),
-    warningText: issueText(safe.warnings),
+    warningText: issueText(safe.warnings, t),
     nextSuggestedAction: safe.nextSuggestedAction || ''
   };
 }

@@ -6,6 +6,8 @@ The current version is v3.1. Image recognition can run with mock, Qwen, OpenAI, 
 
 ## Tech Stack
 
+Windows desktop 0.29.0 adds read-only backup/archive snapshots and full-manifest downloads for generic workbench results, atomic current backups, and explicit ZIP central-directory integrity checks. Extension remains 0.5.5. See [verification and limits](docs/verification-0.29.0.md) and [implementation progress](docs/implementation-progress.md); live Temu transfer, model licensing/quality, official shop sandboxes and clean-machine release gates remain open. Verified iterations are committed locally; remote push is separate.
+
 - Frontend: React, Vite, Tailwind CSS, React Router
 - Backend: Node.js, Express
 - Uploads: Multer
@@ -29,10 +31,10 @@ The current version is v3.1. Image recognition can run with mock, Qwen, OpenAI, 
 - Frontend task progress and status-aware buttons
 - User settings center for local defaults, provider preferences, import scan preferences, queue defaults, safety flags, UI preferences, and cost estimates
 - Clean-room operations workbench for spreadsheet/link image collection, resumable ZIP downloads, SKU-folder image packs, drag ordering, target-KB compression, perceptual deduplication, role overrides, naming placeholders, square-image generation, and optional Sharp/rembg/API batch matting
-- Chrome/Edge Manifest V3 Temu deep-collection helper under `browser-extension/temu-deep-collector`; v0.4.0 extracts lazy/structured/variant images and can return authorized-session image bytes to localhost (requires the user's own logged-in browser session and live-site acceptance testing)
+- Chrome/Edge Manifest V3 Temu deep-collection helper under `browser-extension/temu-deep-collector`; v0.5.5 extracts lazy/structured/variant images, returns authorized-session image bytes to localhost, and preserves retry progress with stage-specific transfer errors (requires the user's own logged-in browser session and live-site acceptance testing)
 - RPA web/Windows-client architecture, feature inventory, completion status, acceptance gates, and roadmap: `docs/rpa-web-desktop-development-status.md`
 - Web platform + Windows client product requirements, scope, acceptance criteria, current-stage mapping, and milestones: `docs/xingya-web-client-development-requirements.md`
-- Windows desktop 0.23.0 localizes controlled export/preflight/payload/sandbox/safety report labels, scan feedback and queue hints without changing business content or downloaded JSON. It also fixes real-sample preview options and strict capability-flag display. Source-file preflight, per-target export isolation, immutable ZIP history and queue safety remain included, with extension 0.5.3. See [implementation progress](docs/implementation-progress.md), [0.23.0 verification](docs/verification-0.23.0.md), [language coverage](docs/i18n-progress.md) and [desktop guide](desktop/README.md). Full bilingual coverage, live-site, model-license, quality and deployment gates remain explicit; build and executable acceptance status are recorded separately.
+- Windows desktop 0.28.1 with extension 0.5.5 adds bounded image downloads, stage-specific failure counts and same-task transfer retries, including interrupted response-body recovery; existing SKU snapshot repair and collection-to-pack workflows remain included. Source and actual portable EXE each pass 287 local mock-flow checks; backend 680, frontend 310 and desktop 22 tests pass. See [implementation progress](docs/implementation-progress.md), [0.28.1 verification](docs/verification-0.28.1.md), [language coverage](docs/i18n-progress.md) and [desktop guide](desktop/README.md). Remaining recovery-type coverage, bilingual/UI work, live-site, model-license, quality and deployment gates are explicit; a local pass is not full production acceptance.
 
 Workbench pages after startup:
 

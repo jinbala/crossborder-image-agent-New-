@@ -11,6 +11,7 @@ import { withActor, claimResource } from '../src/services/ownershipService.js';
 import { createTask, createBatchTask, paths } from '../src/services/db.js';
 import { platformBackup, restorePlatformBackup } from '../src/services/platformStore.js';
 import AdmZip from 'adm-zip';
+import { createCollectionPlan } from '../src/services/workbenchService.js';
 
 const password = 'Member-test-password-123';
 const call = (actor, method, route) => request(app)[method](route).set('Cookie', actor.cookie).set('X-CSRF-Token', actor.csrf);
@@ -30,6 +31,23 @@ beforeEach(async () => {
   image = await sharp({ create: { width: 320, height: 320, channels: 3, background: '#3456ab' } }).png().toBuffer();
 });
 afterEach(() => { process.env.WEB_AUTH_ENABLED = 'false'; });
+
+test('generic recovered manifests enforce HTTP session ownership and permit only an owned read-only download', async () => {
+  const plan = (await call(alice, 'post', '/api/workbench/collection-plans').send({ urls: ['https://example.com/private-item'] }).expect(201)).body;
+  const main = path.join(paths.outputDir, 'workbench', plan.id, 'manifest.json'); await fs.writeFile(main, '{private damaged primary');
+  const route = `/api/workbench/jobs/${plan.id}/manifest`;
+  const own = await call(alice, 'get', route).expect(200); assert.equal(JSON.parse(own.text).id, plan.id);
+  for (const actor of [bob, viewer]) await call(actor, 'get', route).expect(404);
+  await request(app).get(route).expect(401); await call(admin, 'get', route).expect(200);
+  const viewerPlan = await withActor(viewer, () => createCollectionPlan({ urls: ['https://example.com/viewer-item'] }));
+  const viewerMain = path.join(paths.outputDir, 'workbench', viewerPlan.id, 'manifest.json'); await fs.unlink(viewerMain);
+  assert.equal(JSON.parse((await call(viewer, 'get', `/api/workbench/jobs/${viewerPlan.id}/manifest`).expect(200)).text).id, viewerPlan.id);
+  await call(viewer, 'post', '/api/workbench/collection-plans').send({ urls: ['https://example.com/must-not-create'] }).expect(403);
+  await call(admin, 'post', '/api/platform/members').send({ username: 'snapshot-support', password, role: 'support' }).expect(201);
+  const login = await request(app).post('/api/auth/login').send({ username: 'snapshot-support', password, agree: true, agreementVersion: AGREEMENT_VERSION }).expect(200);
+  await request(app).get(route).set('Cookie', login.headers['set-cookie'][0].split(';')[0]).expect(403);
+  assert.equal(await fs.readFile(main, 'utf8'), '{private damaged primary'); await assert.rejects(fs.stat(viewerMain), { code: 'ENOENT' });
+});
 
 test('Web collection drafts require member identity, CSRF and ownership, without exposing another member payload', async () => {
   const route = '/api/workbench/collection-drafts';
@@ -249,4 +267,21 @@ test('password changes revoke pending device pairing as well as existing device 
   await request(app).post('/api/platform/devices/redeem').send({ code: pending.body.code }).expect(401);
   await request(app).post('/api/platform/sync').set('Authorization', `Bearer ${device.body.deviceToken}`).send({ operations: [] }).expect(401);
   await request(app).post('/api/auth/login').send({ username: 'alice', password: 'Changed-password-123456' }).expect(200);
+});
+
+test('recovered SKU manifests and repair approval enforce Web membership, read-only roles and CSRF', async () => {
+  const pack = (await call(alice, 'post', '/api/workbench/sku-packs').field('relativePaths', JSON.stringify(['root/PRIVATE-SKU/main.png'])).field('options', JSON.stringify({ generateSquare: false, preserveOriginals: false })).attach('images', image, { filename: 'source.png', contentType: 'image/png' }).expect(201)).body;
+  const main = path.join(paths.outputDir, 'workbench', pack.id, 'manifest.json'); await fs.writeFile(main, '{damaged private manifest');
+  const base = `/api/workbench/sku-packs/${pack.id}`;
+  await call(alice, 'get', `/api/workbench/jobs/${pack.id}`).expect(200);
+  await call(alice, 'get', `${base}/manifest`).expect(200);
+  await call(bob, 'get', `${base}/manifest`).expect(404); await call(bob, 'get', `${base}/manifest-repair-preview`).expect(404);
+  const preview = (await call(alice, 'get', `${base}/manifest-repair-preview`).expect(200)).body;
+  const payload = { confirm: true, previewHash: preview.previewHash, sourceHash: preview.sourceHash };
+  await request(app).post(`${base}/repair-manifest`).set('Cookie', alice.cookie).send(payload).expect(403);
+  await call(viewer, 'post', `${base}/repair-manifest`).send(payload).expect(403);
+  await call(bob, 'post', `${base}/repair-manifest`).send(payload).expect(404);
+  assert.equal(await fs.readFile(main, 'utf8'), '{damaged private manifest');
+  await call(alice, 'post', `${base}/repair-manifest`).send(payload).expect(200);
+  assert.equal(JSON.parse(await fs.readFile(main)).id, pack.id);
 });

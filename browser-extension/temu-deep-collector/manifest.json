@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "跨境图片工作台 - Temu 深采助手",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "在用户已登录的 Temu 浏览器会话中逐页采集商品标题、销量和图片，并发送到本地工作台。",
   "permissions": ["activeTab", "tabs", "scripting", "storage", "alarms"],
   "host_permissions": [

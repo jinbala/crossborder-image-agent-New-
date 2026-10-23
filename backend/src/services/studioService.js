@@ -7,6 +7,7 @@ import archiver from 'archiver';
 import { paths } from './dbPaths.js';
 import { indexTask } from './taskCenterService.js';
 import { fail } from './accountService.js';
+import { writeWorkbenchManifest } from './workbenchSnapshotService.js';
 
 export function creativeBrief(input = {}) {
   const messages = Array.isArray(input.messages) ? input.messages.slice(-30).map((item) => ({ role: item.role === 'assistant' ? 'assistant' : 'user', content: String(item.content || '').trim().slice(0, 4000) })) : [];
@@ -76,7 +77,7 @@ export async function renderStudio(files, backgroundFile, raw = {}) {
   const now = new Date().toISOString();
   const manifest = { id, type: 'studio', name: options.name, status: successCount === files.length ? 'completed' : successCount ? 'partial' : 'failed', createdAt: now, updatedAt: now, engine: 'sharp-local-compositor', options,
     summary: { inputCount: files.length, outputCount: successCount, successCount, failedCount: files.length - successCount, pendingCount: 0, skippedCount: 0, unprocessedCount: 0 }, items, downloadUrl: url(path.join(directory, `${id}.zip`)) };
-  await fs.writeFile(path.join(directory, 'manifest.json'), JSON.stringify(manifest, null, 2));
+  await writeWorkbenchManifest(manifest);
   await new Promise((resolve, reject) => {
     const output = fsSync.createWriteStream(path.join(directory, `${id}.zip`));
     const archive = archiver('zip', { zlib: { level: 6 } });

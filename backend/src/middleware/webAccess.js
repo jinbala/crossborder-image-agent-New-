@@ -23,7 +23,7 @@ export function canAccess(role, method, route) {
   if (/^\/api\/(?:storage|snapshots|cleanup|stress-test|settings|import-scan|desktop)(?:\/|$)/.test(route) || route === '/api/batches/import-folder') return false;
   if (role === 'operator') return true;
   if (role === 'designer' && /^\/api\/final-acceptance\/workspace(?:\/(?:validate|reset))?$/.test(route)) return true;
-  return /^\/api\/(?:tasks|generate|matting|workflow-templates)(?:\/|$)/.test(route) || /^\/api\/workbench\/(?:sku-packs|image-packs|sku-metadata-imports)$/.test(route) || /^\/api\/workbench\/sku-packs\/[A-Za-z0-9_-]+\/resume$/.test(route);
+  return /^\/api\/(?:tasks|generate|matting|workflow-templates)(?:\/|$)/.test(route) || /^\/api\/workbench\/(?:sku-packs|image-packs|sku-metadata-imports)$/.test(route) || /^\/api\/workbench\/sku-packs\/[A-Za-z0-9_-]+\/(?:resume|repair-manifest)$/.test(route) || /^\/api\/workbench\/collection-jobs\/collect-job-[A-Za-z0-9_-]+\/sku-pack$/.test(route);
 }
 export function webAccess(req, res, next) {
   try {

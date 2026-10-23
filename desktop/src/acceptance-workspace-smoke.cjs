@@ -49,8 +49,7 @@ async function acceptanceWorkspaceSmoke({ window, origin, dataRoot, requestApi, 
     await window.webContents.executeJavaScript('window.confirm=()=>true;document.querySelector("[data-acceptance-reload]").click();void 0'); await wait(window, status('saved'));
     await window.webContents.executeJavaScript(`(() => {const select=document.querySelector('select[aria-label="Interface language / 界面语言"]');select.value='en-US';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await wait(window, `document.querySelector('[data-acceptance-workspace-status]')?.innerText.includes('Saved to this member')`);
-    await window.webContents.executeJavaScript(`document.querySelector('[data-acceptance-workspace-status]').scrollIntoView({block:'center'});new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(resolve,200))))`);
-    await require('./smoke-screenshot.cjs').smokeScreenshot(window, path.join(dataRoot, 'acceptance-workspace-english.png'));
+    await require('./smoke-screenshot.cjs').smokeScreenshot(window, path.join(dataRoot, 'acceptance-workspace-english.png'), { selector: '[data-acceptance-workspace-status]' });
     const beforeReset = JSON.stringify(await json(route));
     await window.webContents.executeJavaScript('window.confirm=()=>false;document.querySelector("[data-acceptance-reset]").click();void 0');
     checks.acceptanceCancelledResetNoWrite = JSON.stringify(await json(route))===beforeReset;

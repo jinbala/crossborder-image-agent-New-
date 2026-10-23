@@ -176,14 +176,14 @@ export default function GeneratePage() {
   const sourceImages = useMemo(() => (Array.isArray(task?.sourceImages) ? task.sourceImages : []), [task?.sourceImages]);
   const plansById = useMemo(() => Object.fromEntries(imagePlans.map((plan) => [plan.id, plan])), [imagePlans]);
   const generatedDisplayItems = useMemo(() => groupGeneratedImages(task || {}), [task?.targets, task?.generatedImages]);
-  const templateAuditSections = useMemo(() => templateAuditDisplaySections(templateAudit), [templateAudit]);
-  const singleImageSections = useMemo(() => singleImageAcceptanceReportSections(singleImageReport), [singleImageReport]);
-  const threeSampleSections = useMemo(() => threeSampleGenerationSections(threeSampleReport), [threeSampleReport]);
+  const templateAuditSections = useMemo(() => templateAuditDisplaySections(templateAudit, t), [templateAudit, t]);
+  const singleImageSections = useMemo(() => singleImageAcceptanceReportSections(singleImageReport, t), [singleImageReport, t]);
+  const threeSampleSections = useMemo(() => threeSampleGenerationSections(threeSampleReport, t), [threeSampleReport, t]);
   const selectedThreeSamples = useMemo(() => threeSampleDrafts.slice(0, 3).map((sample, index) => ({
     ...sample,
     imageId: sample.imageId || sourceImages[index]?.id || sourceImages[0]?.id || ''
   })).filter((sample) => sample.imageId), [threeSampleDrafts, sourceImages]);
-  const threeSampleRunState = threeSampleCanRun({ confirmPaidApi: threeSampleConfirm, samples: selectedThreeSamples });
+  const threeSampleRunState = threeSampleCanRun({ confirmPaidApi: threeSampleConfirm, samples: selectedThreeSamples }, t);
 
   async function generate() {
     setBusy(true);
@@ -225,7 +225,7 @@ export default function GeneratePage() {
 
   function downloadTemplateAudit() {
     if (!templateAudit) return;
-    downloadTemplateAuditJson(templateAudit);
+    downloadTemplateAuditJson(templateAudit, { t });
   }
 
   async function runSingleImageGeneration() {
@@ -261,7 +261,7 @@ export default function GeneratePage() {
   }
 
   async function runThreeSampleGeneration() {
-    const runState = threeSampleCanRun({ confirmPaidApi: threeSampleConfirm, samples: selectedThreeSamples });
+    const runState = threeSampleCanRun({ confirmPaidApi: threeSampleConfirm, samples: selectedThreeSamples }, t);
     if (!runState.canRun) {
       setThreeSampleError(runState.reason);
       return;
@@ -426,7 +426,7 @@ export default function GeneratePage() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="font-semibold text-ink">{t("模板验收摘要")}</div>
-                  <div className="mt-1 text-slate-500">{templateAuditSections.summaryText}</div>
+                  <div data-template-report-summary className="mt-1 text-slate-500">{templateAuditSections.summaryText}</div>
                 </div>
                 <button
                   type="button"
@@ -435,7 +435,7 @@ export default function GeneratePage() {
                 >{t("导出 JSON")}</button>
               </div>
               <div className="rounded border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
-                {templateAuditExportNotice}
+                {t(templateAuditExportNotice)}
               </div>
 
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
@@ -541,7 +541,7 @@ export default function GeneratePage() {
                         <td className="px-3 py-2 text-slate-600">{row.layoutStyle}</td>
                         <td className="px-3 py-2 text-slate-600">{row.variantId}</td>
                         <td className="px-3 py-2 text-slate-600">{row.layoutSeed}</td>
-                        <td className="px-3 py-2 text-slate-500">{row.status}</td>
+                        <td className="px-3 py-2 text-slate-500">{row.statusLabel}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -595,7 +595,7 @@ export default function GeneratePage() {
               <span className="mb-1 block text-xs font-semibold text-slate-500">{t("生成图片类型")}</span>
               <select value={singleImageType} onChange={(event) => setSingleImageType(event.target.value)} className="w-full rounded border border-slate-300 bg-white px-3 py-2 text-sm">
                 {singleImageGenerationOptions.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
+                  <option key={option.value} value={option.value}>{t(option.label)}</option>
                 ))}
               </select>
             </label>
@@ -608,10 +608,10 @@ export default function GeneratePage() {
             </label>
             <div className="flex items-end gap-2">
               <div className="text-xs font-medium text-slate-500">{t("导出真实生图验收报告")}</div>
-              <button type="button" onClick={runSingleImageGeneration} disabled={!imagePlans.length || singleImageBusy} className="rounded bg-coral px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
+              <button data-single-report-run type="button" onClick={runSingleImageGeneration} disabled={!imagePlans.length || singleImageBusy} className="rounded bg-coral px-3 py-2 text-sm font-medium text-white disabled:opacity-60">
                 {singleImageBusy ? t("正在生成...") : t("运行单图真实生成")}
               </button>
-              <button type="button" onClick={downloadSingleImageReport} disabled={!singleImageReport} className="rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-60">{t("下载生成结果 JSON")}</button>
+              <button data-single-report-download type="button" onClick={downloadSingleImageReport} disabled={!singleImageReport} className="rounded border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-60">{t("下载生成结果 JSON")}</button>
             </div>
           </div>
           {singleImageSections.emptyText ? (
@@ -619,7 +619,7 @@ export default function GeneratePage() {
           ) : (
             <div className="space-y-3">
               <div>
-                <div className="font-semibold text-ink">{singleImageSections.title}</div>
+                <div data-single-report-title className="font-semibold text-ink">{singleImageSections.title}</div>
                 <div className="mt-1 text-xs text-slate-500">{t("manualChecklist 默认未检查，请人工打开图片后逐项确认。")}</div>
               </div>
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
@@ -631,7 +631,7 @@ export default function GeneratePage() {
                 ))}
               </div>
               <div className="rounded border border-slate-200 bg-white p-3 text-slate-600">{singleImageSections.resultText}</div>
-              <div className="rounded border border-slate-200 bg-white p-3 text-slate-600">{singleImageSections.statusText}</div>
+              <div data-single-report-status className="rounded border border-slate-200 bg-white p-3 text-slate-600">{singleImageSections.statusText}</div>
               <div className="rounded border border-slate-200 bg-white p-3 text-slate-600">{singleImageSections.providerText}</div>
               <div className="rounded border border-slate-200 bg-white p-3 text-slate-600">{singleImageSections.fallbackText}</div>
               <div className="rounded border border-slate-200 bg-white p-3 text-slate-600">{singleImageSections.auditText}</div>
@@ -661,7 +661,7 @@ export default function GeneratePage() {
                   </select>
                   <select value={sample.imageType} onChange={(event) => updateThreeSampleDraft(index, { imageType: event.target.value })} className="w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs">
                     {singleImageGenerationOptions.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
+                      <option key={option.value} value={option.value}>{t(option.label)}</option>
                     ))}
                   </select>
                 </div>
@@ -689,7 +689,7 @@ export default function GeneratePage() {
                 <div className="grid gap-3 lg:grid-cols-3">
                   {threeSampleSections.sampleCards.map((card) => (
                     <div key={card.sampleId} className="rounded border border-slate-200 bg-white p-3 text-xs text-slate-600">
-                      <div className="font-semibold text-ink">{card.sampleId} / {card.imageType}</div>
+                      <div className="font-semibold text-ink">{card.sampleId} / {card.imageTypeLabel}</div>
                       <div className="mt-1">{card.statusText}</div>
                       <div className="mt-1">{card.fallbackText}</div>
                       <div className="mt-1">{card.qualityText}</div>

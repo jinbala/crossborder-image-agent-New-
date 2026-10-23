@@ -1,13 +1,16 @@
 import fs from 'node:fs/promises';
+import { atomicRename } from '../utils/atomicRename.js';
 import { indexTask } from './taskCenterService.js';
-import { platformDb } from './platformStore.js';
+import { platformDb, collectionCreationEpoch, audit } from './platformStore.js';
 import { mapWithResourceLimit } from './resourcePolicy.js';
-import { assertResource } from './ownershipService.js';
+import { assertResource, currentActor } from './ownershipService.js';
+import { getMattingConfig } from './mattingService.js';
+import { fingerprintCollectionRequest as fingerprint } from './collectionRequestService.js';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import archiver from 'archiver';
 import sharp from 'sharp';
-import AdmZip from 'adm-zip';
+import { readSkuPackState, readSkuPackSnapshot, publishedArchives, checkpointRevision, skuPackDirectory } from './skuPackStateService.js';
 import { createHash } from 'node:crypto';
 import { nanoid } from 'nanoid';
 import { paths } from './db.js';
@@ -128,7 +131,7 @@ function normalizeOptions(input = {}) {
     generateSquare: bool(input.generateSquare, true),
     matteImages: bool(input.matteImages, false),
     mattingProvider,
-    confirmPaidMatting: bool(input.confirmPaidMatting, false),
+    confirmPaidMatting: input.confirmPaidMatting === true,
     mattingFallbackToSharp: bool(input.mattingFallbackToSharp, true),
     deduplicateImages: bool(input.deduplicateImages, false),
     duplicateThreshold: number(input.duplicateThreshold, 4, 0, 16),
@@ -295,7 +298,9 @@ async function renderSkuPack(files = [], rawRelativePaths = [], rawOptions = {},
   if (options.matteImages && options.mattingProvider === 'image2' && !process.env.OPENAI_API_KEY) {
     throw Object.assign(new Error('尚未配置 Image2 所需的 OPENAI_API_KEY'), { statusCode: 400 });
   }
-  const normalizedPaths = stripCommonRoot(files.map((file, index) => normalizedRelativePath(rawRelativePaths[index], file.originalname)));
+  // Paths reaching this per-SKU renderer are already canonical. Stripping again
+  // would turn SKU-A/detail/main.png into a new SKU named "detail".
+  const normalizedPaths = files.map((file, index) => normalizedRelativePath(rawRelativePaths[index], file.originalname));
   const normalizedManualOrder = stripCommonRoot(options.manualOrder);
   const manualRank = new Map(normalizedManualOrder.map((value, index) => [value.toLowerCase(), index]));
   const grouped = new Map();
@@ -531,7 +536,9 @@ async function packCheckpoint(directory, state) {
   const target = path.join(directory, 'manifest.json');
   try { JSON.parse(await fs.readFile(target, 'utf8')); await fs.copyFile(target, `${target}.backup`); } catch { /* Preserve the last valid checkpoint. */ }
   state.updatedAt = new Date().toISOString();
-  await fs.writeFile(`${target}.tmp`, JSON.stringify(state, null, 2)); await fs.rename(`${target}.tmp`, target);
+  state.checkpointRevision = checkpointRevision(state) + 1;
+  if (!Number.isSafeInteger(state.checkpointRevision)) throw new Error('图包恢复点版本超限');
+  await fs.writeFile(`${target}.tmp`, JSON.stringify(state, null, 2)); await atomicRename(`${target}.tmp`, target);
   indexTask(state);
 }
 async function packLock(directory) {
@@ -551,16 +558,21 @@ async function packLock(directory) {
 export async function createSkuPack(files = [], relativePaths = [], rawOptions = {}, execution = {}) {
   if (!files.length || files.length > 300) throw Object.assign(new Error('请选择 1–300 张 SKU 图片'), { statusCode: 400 });
   const options = normalizeOptions(rawOptions);
-  if (options.matteImages && ['external', 'image2'].includes(options.mattingProvider) && !options.confirmPaidMatting) throw Object.assign(new Error('外部抠图需要本次任务的明确费用确认'), { statusCode: 400 });
-  const id = execution.resumeState?.id || `sku-pack-${Date.now()}-${nanoid(6)}`;
+  if (options.matteImages && ['external', 'image2'].includes(options.mattingProvider) && !options.confirmPaidMatting && execution.finalizeOnly !== true) throw Object.assign(new Error('外部抠图需要本次任务的明确费用确认'), { statusCode: 400 });
+  const id = execution.resumeState?.id || execution.preparedId || `sku-pack-${Date.now()}-${nanoid(6)}`;
+  if (!/^sku-pack-[A-Za-z0-9_-]+$/.test(id)) throw Object.assign(new Error('图包任务 ID 无效'), { statusCode: 400 });
+  if (execution.preparedId) assertResource('job', id);
   const directory = path.join(OUTPUT_ROOT, id);
   await fs.mkdir(directory, { recursive: true });
+  if (path.dirname(await fs.realpath(directory)).toLowerCase() !== (await fs.realpath(OUTPUT_ROOT)).toLowerCase()) throw Object.assign(new Error('图包目录超出输出范围'), { statusCode: 403 });
   const release = await packLock(directory);
   const control = { stop: null }; activePacks.set(id, control);
-  let state;
+  let state, finalizing = false;
   const childIds = [];
   try {
-    const normalizedPaths = stripCommonRoot(files.map((file, index) => normalizedRelativePath(relativePaths[index], file.originalname)));
+    if (execution.validateResume) await execution.validateResume();
+    const inputPaths = files.map((file, index) => normalizedRelativePath(relativePaths[index], file.originalname));
+    const normalizedPaths = execution.resumeState ? inputPaths : stripCommonRoot(inputPaths);
     files.forEach((file, index) => {
       const original = normalizedRelativePath(relativePaths[index], file.originalname);
       if (options.roleOverrides[original]) options.roleOverrides[normalizedPaths[index]] = options.roleOverrides[original];
@@ -571,6 +583,10 @@ export async function createSkuPack(files = [], relativePaths = [], rawOptions =
       for (let index = 0; index < files.length; index++) {
         const key = `${index}.bin`, file = files[index];
         await fs.copyFile(file.path, path.join(directory, 'inputs', key));
+        if (execution.inputHashes?.[index] && createHash('sha256').update(await fs.readFile(path.join(directory, 'inputs', key))).digest('hex') !== execution.inputHashes[index]) {
+          await fs.rm(path.join(directory, 'inputs', key), { force: true });
+          throw Object.assign(new Error('来源图片在确认后变化，请重新预检；未处理图片'), { statusCode: 409, code: 'COLLECTION_SOURCE_CHANGED' });
+        }
         sources.push({ key, originalname: file.originalname, relativePath: normalizedPaths[index], size: file.size || (await fs.stat(file.path)).size });
       }
       await fs.writeFile(path.join(directory, 'resume-source.json'), JSON.stringify({ sources, options }));
@@ -580,7 +596,10 @@ export async function createSkuPack(files = [], relativePaths = [], rawOptions =
     files.forEach((file, index) => { const relative = normalizedPaths[index], parts = relative.split('/'), sku = clean(parts.length > 1 ? parts[0] : 'UNGROUPED', 'UNGROUPED', 120); if (!grouped.has(sku)) grouped.set(sku, []); grouped.get(sku).push({ file, relative }); });
     const priorResults = execution.resumeState?.skuResults || [];
     state = { id, type: 'sku-pack', name: options.name, status: 'running', options, createdAt: execution.resumeState?.createdAt || new Date().toISOString(), skuResults: [...priorResults],
-      summary: {}, recovery: { available: true, boundary: 'sku', confirmationRequired: true, message: '已完成的 SKU 保持不变；中断 SKU 会重新处理，涉及外部抠图需重新确认费用。' } };
+      ...(execution.resumeState?.downloadUrl ? { downloadUrl: execution.resumeState.downloadUrl } : {}),
+      archiveGeneration: execution.resumeState?.archiveGeneration || 0,
+      checkpointRevision: checkpointRevision(execution.resumeState),
+      summary: {}, ...(execution.source || execution.resumeState?.source ? { source: execution.source || execution.resumeState.source } : {}), ...(execution.resumeApproval ? { resumeApproval: execution.resumeApproval } : execution.resumeState?.resumeApproval ? { resumeApproval: execution.resumeState.resumeApproval } : {}), recovery: { available: true, boundary: 'sku', confirmationRequired: true, message: '已完成的 SKU 保持不变；中断 SKU 会重新处理，涉及外部抠图需重新确认费用。' } };
     const summarize = () => {
       const items = state.skuResults.flatMap((item) => item.items);
       state.summary = { inputCount: files.length, skuCount: grouped.size, completedSkuCount: state.skuResults.length,
@@ -589,12 +608,14 @@ export async function createSkuPack(files = [], relativePaths = [], rawOptions =
         mattedCount: items.filter((item) => item.matting && item.status === 'success').length, unprocessedCount: files.length - state.skuResults.reduce((sum, item) => sum + item.inputCount, 0) };
     };
     summarize(); await packCheckpoint(directory, state);
+    if (execution.afterPrepared) await execution.afterPrepared({ id });
     let index = 0;
     for (const [sku, entries] of grouped) {
       if (control.stop) break;
       const childId = `${id}-part-${++index}`;
       childIds.push(childId);
       if (state.skuResults.some((item) => item.sku === sku)) continue;
+      if (execution.finalizeOnly === true) throw Object.assign(new Error('仅打包恢复不能重新处理图片，请重新预检'), { statusCode: 409 });
       let child = await fs.readFile(path.join(OUTPUT_ROOT, childId, 'manifest.json'), 'utf8').then(JSON.parse).catch(() => null);
       if (!child || !['completed', 'completed_with_errors'].includes(child.status) || execution.retryFailed) child = await renderSkuPack(entries.map((item) => item.file), entries.map((item) => item.relative), options, childId);
       await fs.mkdir(path.join(directory, 'package'), { recursive: true });
@@ -604,12 +625,23 @@ export async function createSkuPack(files = [], relativePaths = [], rawOptions =
       platformDb().prepare('DELETE FROM task_index WHERE id=?').run(childId);
       if (execution.afterSku) await execution.afterSku({ id, sku, completedSkuCount: state.skuResults.length });
     }
-    state.status = control.stop || (state.summary.failedCount ? (state.summary.outputCount ? 'completed_with_errors' : 'failed') : 'completed');
-    state.recovery.available = state.summary.failedCount > 0 || state.summary.unprocessedCount > 0;
-    const zipPath = path.join(directory, `${id}.zip`);
-    state.manifestUrl = publicPath(path.join(directory, 'manifest.json')); state.downloadUrl = publicPath(zipPath);
-    await zipDirectory(path.join(directory, 'package'), `${zipPath}.tmp`, state);
-    await fs.rename(`${zipPath}.tmp`, zipPath);
+    finalizing = true;
+    const published = await publishedArchives(directory, id);
+    const previousGeneration = published.reduce((maximum, item) => Math.max(maximum, item.generation), Number.isSafeInteger(state.archiveGeneration) ? state.archiveGeneration : 0);
+    state.archiveGeneration = execution.resumeState || published.length ? previousGeneration + 1 : 0;
+    if (!Number.isSafeInteger(state.archiveGeneration)) throw new Error('结果包版本无效，请检查恢复点');
+    const zipPath = path.join(directory, state.archiveGeneration ? `${id}-archive-${state.archiveGeneration}-${nanoid(8)}.zip` : `${id}.zip`);
+    state.manifestUrl = publicPath(path.join(directory, 'manifest.json'));
+    state.recovery.available = true; state.recovery.finalizePending = true;
+    await packCheckpoint(directory, state); // Durable even if publication succeeds but its acknowledgement is lost.
+    const archiveState = { ...state,
+      status: control.stop || (state.summary.failedCount ? (state.summary.outputCount ? 'completed_with_errors' : 'failed') : 'completed'),
+      downloadUrl: publicPath(zipPath),
+      recovery: { ...state.recovery, available: state.summary.failedCount > 0 || state.summary.unprocessedCount > 0, finalizePending: false } };
+    await zipDirectory(path.join(directory, 'package'), `${zipPath}.tmp`, archiveState);
+    if (execution.validatePackage) await execution.validatePackage();
+    await atomicRename(`${zipPath}.tmp`, zipPath);
+    Object.assign(state, archiveState);
     await packCheckpoint(directory, state);
     if (!state.recovery.available) {
       await fs.rm(path.join(directory, 'inputs'), { recursive: true, force: true }).catch(() => {});
@@ -617,7 +649,7 @@ export async function createSkuPack(files = [], relativePaths = [], rawOptions =
     }
     return state;
   } catch (error) {
-    if (state) { state.status = 'paused'; state.error = { code: error.code || 'PACK_INTERRUPTED', message: '处理已暂停，恢复时保留已完成的 SKU' }; await packCheckpoint(directory, state).catch(() => {}); }
+    if (state) { state.status = 'paused'; state.recovery.available = true; if (finalizing) state.recovery.finalizePending = true; state.error = { code: error.code || 'PACK_INTERRUPTED', stage: finalizing ? 'finalize' : 'processing', message: '处理已暂停，恢复时保留已完成的 SKU' }; await packCheckpoint(directory, state).catch(() => {}); }
     throw Object.assign(new Error(`${state ? '图包进度已保存，可在任务中心恢复' : '输入暂存未完成，请重新选择原始文件后重试'}：${id}。${error.message}`), { statusCode: error.statusCode || 500, jobId: id });
   } finally { activePacks.delete(id); await release(); }
 }
@@ -628,35 +660,129 @@ export async function controlSkuPack(id, action) {
   const status = action === 'cancel' ? 'cancelled' : 'paused';
   if (activePacks.has(id)) { activePacks.get(id).stop = status; return { requested: true, status, boundary: 'sku' }; }
   const directory = path.join(OUTPUT_ROOT, id);
-  const state = JSON.parse(await fs.readFile(path.join(directory, 'manifest.json'), 'utf8'));
+  const snapshot = await readSkuPackSnapshot(id);
+  if (snapshot.source !== 'primary') throw Object.assign(new Error('当前展示恢复快照，请先确认修复主清单，再暂停或取消此任务'), { statusCode: 409 });
+  const state = snapshot.state;
   if (!state.recovery?.available) throw Object.assign(new Error('任务已结束，无需暂停或取消'), { statusCode: 409 });
   state.status = status; await packCheckpoint(directory, state); return state;
 }
 export function pauseRunningSkuPacks() { for (const control of activePacks.values()) control.stop = 'paused'; return activePacks.size; }
 
-export async function resumeSkuPack(id, input = {}, execution = {}) {
-  assertResource('job', id);
-  if (!/^sku-pack-[A-Za-z0-9_-]+$/.test(id)) throw Object.assign(new Error('图包任务 ID 无效'), { statusCode: 400 });
-  if (input.confirm !== true) throw Object.assign(new Error('请确认恢复，中断的 SKU 会重新处理'), { statusCode: 400 });
-  const directory = path.join(OUTPUT_ROOT, id);
-  let state;
-  try { state = JSON.parse(await fs.readFile(path.join(directory, 'manifest.json'), 'utf8')); }
-  catch {
-    try { state = JSON.parse(new AdmZip(path.join(directory, `${id}.zip`)).getEntry('manifest.json').getData().toString('utf8')); }
-    catch { state = JSON.parse(await fs.readFile(path.join(directory, 'manifest.json.backup'), 'utf8')); }
+function manifestRepairPreview(id, snapshot) {
+  return { id, canRepair: snapshot.source !== 'primary' && !activePacks.has(id), busy: activePacks.has(id),
+    source: snapshot.source, sourceName: snapshot.sourceName, sourceHash: snapshot.sourceHash, fileBytes: snapshot.bytes.length,
+    previewHash: fingerprint({ id, actorId: currentActor()?.id || 'local', epoch: collectionCreationEpoch(), primaryHash: snapshot.primaryHash, sourceHash: snapshot.sourceHash, source: snapshot.sourceName }),
+    onlyManifest: true, imageCount: 0, remote: false };
+}
+
+export async function previewSkuManifestRepair(id) { return manifestRepairPreview(id, await readSkuPackSnapshot(id)); }
+
+export async function repairSkuManifest(id, input = {}, execution = {}) {
+  const actor = currentActor();
+  if (actor && !['admin', 'operator', 'designer'].includes(actor.role)) throw Object.assign(new Error('当前角色不能修复任务清单'), { statusCode: 403 });
+  if (input.confirm !== true || !/^[a-f0-9]{64}$/.test(input.previewHash || '') || !/^[a-f0-9]{64}$/.test(input.sourceHash || '')) throw Object.assign(new Error('请先预览并明确确认仅修复主清单'), { statusCode: 400 });
+  const directory = await skuPackDirectory(id), release = await packLock(directory);
+  const temp = path.join(directory, `manifest.json.repair-${nanoid(12)}.tmp`);
+  try {
+    const snapshot = await readSkuPackSnapshot(id), preview = manifestRepairPreview(id, snapshot);
+    if (snapshot.source === 'primary' && snapshot.sourceHash === input.sourceHash) return { id, repaired: false, alreadyCurrent: true };
+    const changed = () => Object.assign(new Error('主清单或恢复来源已变化，请重新预览确认；未重新处理图片'), { statusCode: 409, code: 'SKU_REPAIR_CHANGED' });
+    if (!preview.canRepair || preview.previewHash !== input.previewHash || preview.sourceHash !== input.sourceHash) throw changed();
+    audit(actor, 'sku-manifest-repair-prepare', id, 202, { previewHash: preview.previewHash, sourceHash: preview.sourceHash, previousHash: snapshot.primaryHash, source: snapshot.source });
+    await fs.writeFile(temp, snapshot.bytes, { flag: 'wx' });
+    if (execution.beforeCommit) await execution.beforeCommit();
+    const current = manifestRepairPreview(id, await readSkuPackSnapshot(id));
+    if (current.previewHash !== preview.previewHash) throw changed();
+    const preservedDamaged = snapshot.primaryBytes === null ? null : `manifest.json.damaged-${Date.now()}-${nanoid(8)}`;
+    if (preservedDamaged) await fs.writeFile(path.join(directory, preservedDamaged), snapshot.primaryBytes, { flag: 'wx' });
+    await atomicRename(temp, path.join(directory, 'manifest.json'));
+    indexTask(snapshot.state);
+    audit(actor, 'sku-manifest-repair-complete', id, 200, { previewHash: preview.previewHash, sourceHash: preview.sourceHash, preservedDamaged, imagesProcessed: 0 });
+    return { id, repaired: true, preservedDamaged, sourceHash: snapshot.sourceHash, imagesProcessed: 0 };
+  } finally { await fs.rm(temp, { force: true }).catch(() => {}); await release(); }
+}
+
+async function packageSnapshot(directory) {
+  const base = path.resolve(directory, 'package'), files = [];
+  if ((await fs.realpath(base)).toLowerCase() !== base.toLowerCase() || (await fs.lstat(base)).isSymbolicLink()) throw Object.assign(new Error('图包输出目录无效'), { statusCode: 403 });
+  async function visit(relative = '') {
+    for (const name of (await fs.readdir(path.join(base, relative))).sort()) {
+      const child = path.join(relative, name), file = path.join(base, child), stat = await fs.lstat(file), real = await fs.realpath(file);
+      if (stat.isSymbolicLink() || !real.toLowerCase().startsWith(`${base.toLowerCase()}${path.sep}`)) throw Object.assign(new Error('图包输出路径越界'), { statusCode: 403 });
+      if (stat.isDirectory()) await visit(child);
+      else if (stat.isFile()) {
+        if (files.length >= 10000) throw Object.assign(new Error('图包文件过多，请人工检查输出目录'), { statusCode: 400 });
+        const digest = createHash('sha256'); for await (const chunk of fsSync.createReadStream(file)) digest.update(chunk);
+        files.push({ relativePath: child.split(path.sep).join('/'), size: stat.size, sha256: digest.digest('hex') });
+      } else throw Object.assign(new Error('图包输出不是普通文件'), { statusCode: 400 });
+    }
   }
-  if (state.id !== id || state.type !== 'sku-pack') throw Object.assign(new Error('图包恢复点无效'), { statusCode: 400 });
-  if (!state.recovery?.available) return state;
+  await visit(); return files;
+}
+
+async function skuResumeContext(id, retryFailed = false) {
+  const state = await readSkuPackState(id), directory = path.join(OUTPUT_ROOT, id);
+  const legacyFinalize = state.status === 'paused' && ['EPERM', 'EACCES', 'EBUSY'].includes(state.error?.code) && state.summary?.unprocessedCount === 0 && await fs.stat(path.join(directory, `${id}.zip.tmp`)).then(stat => stat.isFile()).catch(() => false);
+  const interruptedAfterLastSku = ['running', 'paused'].includes(state.status) && state.recovery?.available === true && state.summary?.unprocessedCount === 0;
+  const finalizePending = state.recovery?.finalizePending === true || legacyFinalize || interruptedAfterLastSku;
+  if (!state.recovery?.available && !finalizePending) return { state, preview: { id, canResume: false, complete: true, imageCount: 0, skuCount: 0, skus: [], options: state.options } };
   const plan = JSON.parse(await fs.readFile(path.join(directory, 'resume-source.json'), 'utf8'));
-  const sources = [];
+  if (!Array.isArray(plan.sources) || !plan.sources.length || plan.sources.length > 300) throw Object.assign(new Error('图包恢复输入清单无效'), { statusCode: 400 });
+  const options = { ...normalizeOptions(plan.options), confirmPaidMatting: false };
+  const retained = (state.skuResults || []).filter(item => !(retryFailed && item.failedCount > 0));
+  const done = new Set(retained.map(item => item.sku));
+  const sources = [], selected = [], seenKeys = new Set();
+  let selectedBytes = 0;
   for (const item of plan.sources) {
-    if (!/^\d+\.bin$/.test(item.key)) throw Object.assign(new Error('恢复输入无效'), { statusCode: 400 });
+    if (!/^\d+\.bin$/.test(item.key) || seenKeys.has(item.key)) throw Object.assign(new Error('恢复输入无效'), { statusCode: 400 });
+    seenKeys.add(item.key);
+    const relative = normalizedRelativePath(item.relativePath, item.originalname), parts = relative.split('/');
+    const sku = clean(parts.length > 1 ? parts[0] : 'UNGROUPED', 'UNGROUPED', 120);
+    if (done.has(sku)) { sources.push({ ...item, path: path.join(directory, 'inputs', item.key) }); continue; }
     const filePath = await fs.realpath(path.join(directory, 'inputs', item.key));
     if (path.dirname(filePath).toLowerCase() !== path.join(directory, 'inputs').toLowerCase()) throw Object.assign(new Error('恢复输入越界'), { statusCode: 403 });
+    const stat = await fs.lstat(path.join(directory, 'inputs', item.key));
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 15 * 1024 * 1024) throw Object.assign(new Error('恢复图片路径或大小无效'), { statusCode: 400 });
+    selectedBytes += stat.size;
+    if (selectedBytes > 500 * 1024 * 1024) throw Object.assign(new Error('恢复图片总大小超过 500MB，请拆分任务'), { statusCode: 400 });
+    selected.push({ key: item.key, sku, relativePath: relative, sha256: createHash('sha256').update(await fs.readFile(filePath)).digest('hex'), size: stat.size });
     sources.push({ ...item, path: filePath });
   }
-  if (input.retryFailed === true) state.skuResults = state.skuResults.filter((item) => !item.failedCount);
-  return createSkuPack(sources, plan.sources.map((item) => item.relativePath), { ...plan.options, confirmPaidMatting: input.confirmPaidMatting === true }, { ...execution, resumeState: state, retryFailed: input.retryFailed === true });
+  const onlyFinalize = selected.length === 0 && finalizePending;
+  const packageFiles = onlyFinalize ? await packageSnapshot(directory) : [];
+  const remote = selected.length > 0 && options.matteImages && ['external', 'image2'].includes(options.mattingProvider);
+  const destination = remote ? getMattingConfig().dataDestinations.find(item => item.provider === options.mattingProvider) : null;
+  let originValid = !remote;
+  try { const url = new URL(destination.origin); originValid = ['http:', 'https:'].includes(url.protocol) && url.origin === destination.origin && !url.username && !url.password; } catch { /* A missing remote provider fails closed. */ }
+  const snapshot = { id, actorId: currentActor()?.id || 'local', epoch: collectionCreationEpoch(), state, options, retryFailed, selected, destination, onlyFinalize, packageFiles };
+  const preview = { id, canResume: (selected.length > 0 || onlyFinalize) && originValid && !activePacks.has(id), previewHash: fingerprint(snapshot), retryFailed, onlyFinalize, packageFiles,
+    imageCount: selected.length, bytes: selectedBytes, skuCount: new Set(selected.map(item => item.sku)).size, skus: [...new Set(selected.map(item => item.sku))],
+    inputs: selected, options, remote, destination, busy: activePacks.has(id), blocked: !originValid ? 'MATTING_DESTINATION_UNAVAILABLE' : selected.length || onlyFinalize ? null : 'NO_PENDING_SKUS' };
+  return { state: { ...state, skuResults: retained }, plan, sources, preview };
+}
+
+export async function previewSkuPackResume(id, input = {}) {
+  return (await skuResumeContext(id, input.retryFailed === true)).preview;
+}
+
+export async function resumeSkuPack(id, input = {}, execution = {}) {
+  if (input.confirm !== true) throw Object.assign(new Error('请确认恢复，中断的 SKU 会重新处理'), { statusCode: 400 });
+  const retryFailed = input.retryFailed === true, context = await skuResumeContext(id, retryFailed);
+  if (context.preview.complete) return context.state;
+  const preview = context.preview;
+  if (preview.remote && input.confirmPaidMatting !== true) throw Object.assign(new Error('外部抠图需要本次恢复的明确费用确认'), { statusCode: 400 });
+  if ((preview.remote || preview.onlyFinalize || input.previewHash !== undefined) && input.previewHash !== preview.previewHash) throw Object.assign(new Error('图包恢复范围、来源或服务去向已变化，请重新预检确认'), { statusCode: 409, code: 'SKU_RESUME_CHANGED' });
+  if (!preview.canResume) throw Object.assign(new Error(preview.busy ? '图包任务正在执行，请稍后刷新' : preview.blocked === 'MATTING_DESTINATION_UNAVAILABLE' ? '抠图服务未配置或数据去向无效，未启动恢复' : '没有可恢复的 SKU，请检查失败重试选项'), { statusCode: 409 });
+  const validateResume = async () => {
+    const latest = await skuResumeContext(id, retryFailed);
+    if (latest.preview.previewHash !== preview.previewHash) throw Object.assign(new Error('恢复点在取得执行锁前变化，请重新预检确认'), { statusCode: 409, code: 'SKU_RESUME_CHANGED' });
+    if (execution.validateResume) await execution.validateResume();
+  };
+  return createSkuPack(context.sources, context.plan.sources.map(item => item.relativePath), { ...context.preview.options, confirmPaidMatting: input.confirmPaidMatting === true }, {
+    ...execution, validateResume, resumeState: context.state, retryFailed, finalizeOnly: preview.onlyFinalize === true,
+    ...(preview.onlyFinalize ? { validatePackage: async () => { if (fingerprint(await packageSnapshot(path.join(OUTPUT_ROOT, id))) !== fingerprint(preview.packageFiles)) throw Object.assign(new Error('打包期间输出图片发生变化，请重新预检'), { statusCode: 409, code: 'SKU_RESUME_CHANGED' }); } } : {}),
+    resumeApproval: { previewHash: preview.previewHash, approvedAt: new Date().toISOString(), retryFailed, imageCount: preview.imageCount, skus: preview.skus, inputs: preview.inputs, destination: preview.destination, onlyFinalize: preview.onlyFinalize === true, ...(preview.onlyFinalize ? { packageFiles: preview.packageFiles } : {}) }
+  });
 }
 
 export { normalizeOptions as normalizeSkuPackOptions, roleHint, stripCommonRoot, visualRoleHint, perceptualHash, hammingDistance };

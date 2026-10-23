@@ -12,6 +12,14 @@ const entries = listPackage(archive).map((entry) => entry.replaceAll('\\', '/').
 const forbidden = entries.filter((entry) => /(^|\/)(?:\.env|\.smoke-data|my-browser-data|\.git)(?:\/|$)|^(?:uploads|outputs|backups|runtime\/(?:uploads|outputs|backups|backend\/data))(?:\/|$)/.test(entry)
   || (!entry.startsWith('node_modules/') && /\.(?:sqlite|sqlite-wal|sqlite-shm|log)$/.test(entry)));
 const required = ['src/main.cjs', 'src/preload.cjs', 'src/cloud-sync.cjs', 'src/update-service.cjs', 'runtime/backend/src/server.js', 'runtime/backend/src/services/accountService.js', 'runtime/backend/src/services/ownershipService.js', 'runtime/backend/src/services/resourceAssignmentService.js', 'runtime/backend/src/middleware/resourceAccess.js', 'runtime/backend/src/middleware/assetAccess.js', 'runtime/backend/src/services/commerceSandboxService.js', 'runtime/backend/src/services/skuPackService.js', 'runtime/frontend/index.html', 'runtime/browser-extension/temu-deep-collector/manifest.json', 'runtime/docs/implementation-progress.md'];
+required.push('src/collection-details-smoke.cjs');
+required.push('src/direct-collection-pack-smoke.cjs', 'runtime/backend/src/services/collectionPackService.js');
+required.push('src/sku-results-resume-smoke.cjs');
+required.push('src/report-details-i18n-smoke.cjs');
+required.push('runtime/backend/src/utils/atomicRename.js');
+required.push('src/zip-lock-diagnostic.cjs');
+required.push('src/sku-manifest-recovery-smoke.cjs', 'runtime/backend/src/services/skuPackStateService.js');
+required.push('src/workbench-snapshot-smoke.cjs', 'runtime/backend/src/services/workbenchSnapshotService.js');
 required.push('runtime/backend/src/services/supportService.js');
 required.push('runtime/backend/src/services/collectionRequestService.js', 'runtime/backend/src/services/workspaceLifecycle.js');
 required.push('src/collection-draft-smoke.cjs', 'runtime/backend/src/services/collectionDraftService.js');
@@ -52,6 +60,13 @@ sourceFiles.push('src/smoke-step.cjs');
 sourceFiles.push('src/target-export-smoke.cjs');
 sourceFiles.push('src/export-reports-i18n-smoke.cjs');
 sourceFiles.push('src/receiving-workflow-smoke.cjs');
+sourceFiles.push('src/collection-details-smoke.cjs');
+sourceFiles.push('src/direct-collection-pack-smoke.cjs');
+sourceFiles.push('src/sku-results-resume-smoke.cjs');
+sourceFiles.push('src/report-details-i18n-smoke.cjs');
+sourceFiles.push('src/zip-lock-diagnostic.cjs');
+sourceFiles.push('src/sku-manifest-recovery-smoke.cjs');
+sourceFiles.push('src/workbench-snapshot-smoke.cjs', 'runtime/backend/src/services/workbenchSnapshotService.js');
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const sourceMismatch = sourceFiles.filter((file) => {
   const original = frontendBuildFiles.includes(file) ? path.join(path.dirname(desktop), 'frontend', 'dist', file.slice('runtime/frontend/'.length)) : file.startsWith('runtime/') ? path.join(path.dirname(desktop), file.slice('runtime/'.length)) : path.join(desktop, file);

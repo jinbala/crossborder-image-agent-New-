@@ -1,4 +1,5 @@
 import { useLocale } from '../i18n/LocaleProvider.jsx';
+import { reportDisplayLabel } from '../utils/reportDisplayLabels.js';
 import { approvePaidOperation } from '../utils/paidOperationApproval.js';
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -205,16 +206,16 @@ export default function ReviewPage() {
     [task?.targets, task?.review?.items, generatedById]
   );
   const reviewReportDisplay = useMemo(
-    () => getReviewReportDisplayModel(task?.normalizedReviewReport),
-    [task?.normalizedReviewReport]
+    () => getReviewReportDisplayModel(task?.normalizedReviewReport, t),
+    [task?.normalizedReviewReport, t]
   );
   const autoFixPlanDisplay = useMemo(
-    () => getAutoFixPlanDisplayModel(autoFixPlan),
-    [autoFixPlan]
+    () => getAutoFixPlanDisplayModel(autoFixPlan, t),
+    [autoFixPlan, t]
   );
   const autoFixExecutionDisplay = useMemo(
-    () => getAutoFixExecutionDisplayModel(autoFixExecutionResult),
-    [autoFixExecutionResult]
+    () => getAutoFixExecutionDisplayModel(autoFixExecutionResult, t),
+    [autoFixExecutionResult, t]
   );
 
   async function review(mode = reviewMode) {
@@ -403,7 +404,7 @@ export default function ReviewPage() {
         actions={(
           <button
             type="button"
-            onClick={exportReviewReport}
+            data-review-report-download onClick={exportReviewReport}
             disabled={!task.normalizedReviewReport}
             className="rounded border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-60"
           >{t("导出审核报告 JSON")}</button>
@@ -416,7 +417,7 @@ export default function ReviewPage() {
             <div className="rounded border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
               {reviewReportDisplay.nextSuggestedAction}
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div data-review-report-summary className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {reviewReportDisplay.summaryCards.map((card) => (
                 <div key={card.label} className="rounded border border-slate-200 bg-white p-3">
                   <div className="text-xs text-slate-500">{card.label}</div>
@@ -431,10 +432,10 @@ export default function ReviewPage() {
                   <div key={group.groupKey} className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="font-semibold">{group.title}</div>
-                      <span className="rounded bg-white px-2 py-1 text-xs">{group.severity} / {group.count || 1}{" " + t("项")}</span>
+                      <span className="rounded bg-white px-2 py-1 text-xs">{group.severityLabel} / {group.count || 1}{" " + t("项")}</span>
                     </div>
                     {group.imageTypes?.length > 0 && (
-                      <div className="mt-1 text-xs">{t("图片类型：")}{group.imageTypes.join(' / ')}</div>
+                      <div className="mt-1 text-xs">{t("图片类型：")}{group.imageTypeLabels.join(' / ')}</div>
                     )}
                     {group.messages?.length > 0 && (
                       <ul className="mt-2 list-disc space-y-1 pl-5">
@@ -489,11 +490,11 @@ export default function ReviewPage() {
                   <div key={suggestion.suggestionId} className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-800">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="font-semibold">{suggestion.title}</div>
-                      <span className="rounded bg-white px-2 py-1 text-xs">{suggestion.actionType}</span>
+                      <span className="rounded bg-white px-2 py-1 text-xs">{suggestion.actionTypeLabel}</span>
                     </div>
                     <div className="mt-1 text-xs">{suggestion.description}</div>
                     <div className="mt-1 text-xs">{t("字段：")}{suggestion.fieldLabel || '-'} {suggestion.fieldKey ? `(${suggestion.fieldKey})` : ''}</div>
-                    <div className="mt-1 text-xs">{t("图片类型：")}{(suggestion.affectedImageTypes || []).join(' / ') || suggestion.imageType || '-'}</div>
+                    <div className="mt-1 text-xs">{t("图片类型：")}{suggestion.imageTypeLabels.join(' / ')}</div>
                     <div className="mt-1 text-xs">{t("可自动修正候选：")}{suggestion.canAutoFixLater ? t("是") : t("否")}{" " + t("/ 需要人工确认：")}{suggestion.requiresManualConfirm ? t("是") : t("否")}</div>
                     {suggestion.recommendedSteps?.length > 0 && (
                       <ol className="mt-2 list-decimal space-y-1 pl-5">
@@ -525,7 +526,7 @@ export default function ReviewPage() {
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={generateAutoFixPlan}
+              data-auto-fix-preview onClick={generateAutoFixPlan}
               disabled={autoFixBusy}
               className="rounded border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 disabled:opacity-60"
             >
@@ -555,7 +556,7 @@ export default function ReviewPage() {
                   </ul>
                 </div>
               )}
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <div data-auto-fix-summary className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 {autoFixPlanDisplay.summaryCards.map((card) => (
                   <div key={card.label} className="rounded border border-slate-200 bg-white p-3">
                     <div className="text-xs text-slate-500">{card.label}</div>
@@ -581,7 +582,7 @@ export default function ReviewPage() {
                         <span className="rounded bg-white px-2 py-1 text-xs">{action.actionTypeLabel}</span>
                       </div>
                       <div className="mt-1 text-xs">{action.description}</div>
-                      <div className="mt-1 text-xs">{t("图片类型：")}{action.target?.imageType || '-'}</div>
+                      <div className="mt-1 text-xs">{t("图片类型：")}{reportDisplayLabel('imageType', action.target?.imageType || '-', t)}</div>
                       <div className="mt-1 text-xs">{t("风险等级：")}{action.riskLevel || '-'} / dry-run：{action.dryRunOnly ? t("是") : t("否")}</div>
                       {action.previewChange && (
                         <div className="mt-2 rounded border border-emerald-100 bg-white p-2 text-xs">{t("预览变化：")}{action.previewChange.changeType || 'flagOnly'} / before: {action.previewChange.before || '-'} / after: {action.previewChange.after || '-'}

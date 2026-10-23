@@ -5,7 +5,7 @@ const {isInside}=require('./runtime.cjs');
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function wait(window,expression){for(let i=0;i<250;i++){if(await window.webContents.executeJavaScript(expression))return true;await pause(100);}throw new Error(`Target export UI timed out: ${expression}`);}
-async function shot(window,file,selector){await window.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'center'});new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(resolve,200))))`);await require('./smoke-screenshot.cjs').smokeScreenshot(window,file);}
+async function shot(window,file,selector){await require('./smoke-screenshot.cjs').smokeScreenshot(window,file,{selector});}
 async function download(window,destination,expression){
   const done=new Promise((resolve,reject)=>{const timer=setTimeout(()=>{window.webContents.session.removeListener('will-download',save);reject(new Error('Target ZIP download timed out'));},20000);function save(_event,item){item.setSavePath(destination);item.once('done',(_done,state)=>{clearTimeout(timer);state==='completed'?resolve():reject(new Error(`Target ZIP download ${state}`));});}window.webContents.session.once('will-download',save);});
   await window.webContents.executeJavaScript(expression);await done;return fs.readFile(destination);

@@ -18,7 +18,7 @@ test('packaged extension is copied to a stable OS directory and can update witho
   try {
     const source = path.resolve(__dirname, '../../browser-extension/temu-deep-collector');
     const directory = await prepareExtension(source, root);
-    assert.equal(JSON.parse(await fs.readFile(path.join(directory, 'manifest.json'))).version, '0.5.4');
+    assert.equal(JSON.parse(await fs.readFile(path.join(directory, 'manifest.json'))).version, '0.5.5');
     await fs.writeFile(path.join(directory, 'user-note.txt'), 'preserve');
     assert.equal(await prepareExtension(source, root), directory);
     assert.equal(await fs.readFile(path.join(directory, 'user-note.txt'), 'utf8'), 'preserve');

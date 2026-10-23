@@ -176,6 +176,16 @@ async function collectOne(url, waitMs, existingTabId = null, resumeChallenge = f
   }
 }
 
+async function readJobResponse(response, expectedId = null) {
+  let job;
+  try { job = await response.json(); }
+  catch { throw transferProblem('LOCAL_JOB_RESPONSE_INTERRUPTED', '本机任务回执读取中断或格式无效；清单和原请求标识已保留，再次发送将找回原任务，不会自动另建任务'); }
+  if (!job || typeof job.id !== 'string' || !job.id || !Array.isArray(job.items) || (expectedId && job.id !== expectedId)) {
+    throw transferProblem('LOCAL_JOB_RESPONSE_INVALID', '本机返回的任务身份或商品清单不符，请核对客户端地址后再次发送；原任务和请求标识保留');
+  }
+  return job;
+}
+
 async function createBackendJob(state, verifiedConnection = null) {
   const connection = verifiedConnection || await checkClientConnection();
   if (connection.capabilities?.collectionRequestIdempotency !== 1 || !connection.capabilities.collectionCreationEpoch) throw new Error('当前客户端不支持防重复回传，请启动 0.12.0 或更新版本后重新配对；采集清单已保留');
@@ -205,7 +215,7 @@ async function createBackendJob(state, verifiedConnection = null) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.error || `本地工作台返回 HTTP ${response.status}`);
   }
-  const job = await response.json();
+  const job = await readJobResponse(response);
   if (!job?.id || job.creation?.durable !== true) throw new Error('客户端未确认防重复请求，请核对客户端版本后再次发送；原请求标识保留');
   await writeState({ backendJob: job, creationRequest: { id: pending.id } });
   return job;
@@ -226,6 +236,53 @@ async function requestImageHostPermissions(rows) {
   return chrome.permissions.request({ origins: missing });
 }
 
+function transferProblem(code, message) { return Object.assign(new Error(message), { code }); }
+
+async function fetchBrowserImage(sourceUrl, productUrl) {
+  let imageUrl;
+  try { imageUrl = new URL(sourceUrl); } catch { throw transferProblem('IMAGE_URL_INVALID', '图片地址无效，原始清单已保留'); }
+  if (imageUrl.protocol !== 'https:' || imageUrl.username || imageUrl.password) throw transferProblem('IMAGE_URL_INVALID', '图片地址必须为无凭据的 HTTPS 链接');
+  const host = imageUrl.hostname;
+  const limit = 25 * 1024 * 1024;
+  // The same signal covers headers AND body streaming; a stalled image must not hold the whole round forever.
+  const signal = AbortSignal.timeout(25000);
+  try {
+    const response = await fetch(imageUrl.href, { credentials: 'include', cache: 'no-store', referrer: productUrl || undefined, signal });
+    let reader, finished = false;
+    try {
+      if (!response.ok) throw transferProblem('IMAGE_HTTP_ERROR', `图片站 ${host} 返回 HTTP ${response.status}，请人工检查页面和图片权限，不会绕过限制`);
+      const declaredType = String(response.headers.get('content-type') || '').split(';')[0].toLowerCase();
+      const contentType = declaredType === 'image/jpg' ? 'image/jpeg' : declaredType;
+      if (!/^image\/(jpeg|png|webp|avif|gif|tiff)$/.test(contentType)) throw transferProblem('IMAGE_CONTENT_TYPE', `图片站 ${host} 未返回受支持图片，请人工检查登录或验证页面`);
+      if (Number(response.headers.get('content-length')) > limit) throw transferProblem('IMAGE_TOO_LARGE', `图片站 ${host} 的图片超过 25MB`);
+      if (!response.body?.getReader) throw transferProblem('IMAGE_BODY_MISSING', `图片站 ${host} 未返回可读取的图片内容`);
+      reader = response.body.getReader();
+      const chunks = []; let size = 0;
+      while (true) {
+        const part = await reader.read();
+        if (part.done) { finished = true; break; }
+        size += part.value.byteLength;
+        if (size > limit) throw transferProblem('IMAGE_TOO_LARGE', `图片站 ${host} 的图片超过 25MB`);
+        chunks.push(part.value);
+      }
+      if (!size) throw transferProblem('IMAGE_EMPTY', `图片站 ${host} 返回空图片`);
+      return { blob: new Blob(chunks, { type: contentType }), contentType, finalUrl: response.url || sourceUrl };
+    } finally {
+      if (!finished) {
+        if (reader) await reader.cancel().catch(() => {});
+        else if (response.body?.cancel) await response.body.cancel().catch(() => {});
+      }
+      reader?.releaseLock?.();
+    }
+  } catch (error) {
+    if (error.code && String(error.code).startsWith('IMAGE_')) throw error;
+    const timedOut = signal.aborted || ['TimeoutError', 'AbortError'].includes(error.name);
+    throw transferProblem(timedOut ? 'IMAGE_DOWNLOAD_TIMEOUT' : 'IMAGE_DOWNLOAD_UNREACHABLE',
+      timedOut ? `下载图片站 ${host} 的图片超时（25 秒），可稍后重试，已保存图片不会重下`
+        : `无法从图片站 ${host} 下载图片，请检查浏览器图片域名授权、网络及商品页登录状态；清单保留`);
+  }
+}
+
 async function mirrorBrowserImages(state, backendJob) {
   const maxImages = Math.max(1, Math.min(100, Number(state.options.maxImagesPerProduct || 50)));
   const tasks = [];
@@ -234,39 +291,39 @@ async function mirrorBrowserImages(state, backendJob) {
     if (!backendItem || backendItem.status === 'skipped') return;
     (row.imageUrls || []).slice(0, maxImages).filter((sourceUrl) => !backendItem.images?.some((image) => image.sourceUrl === sourceUrl && image.status === 'success')).forEach((sourceUrl) => tasks.push({ backendItem, row, sourceUrl }));
   });
-  const progress = { total: tasks.length, success: 0, failed: 0, failures: [] };
+  const progress = { total: tasks.length, success: 0, failed: 0, pending: tasks.length, failures: [] };
   if (!tasks.length) return progress;
   const granted = await requestImageHostPermissions(state.rows);
   if (!granted) {
     progress.failed = tasks.length;
-    progress.failures.push({ code: 'HOST_PERMISSION_DENIED', message: '用户未授权图片域名，保留链接供本地任务稍后下载。' });
+    progress.pending = 0;
+    progress.failures.push({ code: 'HOST_PERMISSION_DENIED', stage: 'image-permission', message: '用户未授权图片域名，保留链接供本地任务稍后下载。' });
     return progress;
   }
   for (const task of tasks) {
+    let stage = 'image-download', stopRound = false;
     try {
-      const imageResponse = await fetch(task.sourceUrl, { credentials: 'include', cache: 'no-store', referrer: task.row.productUrl || undefined });
-      if (!imageResponse.ok) throw new Error(`图片返回 HTTP ${imageResponse.status}`);
-      const declaredType = String(imageResponse.headers.get('content-type') || '').split(';')[0].toLowerCase();
-      const contentType = declaredType === 'image/jpg' ? 'image/jpeg' : declaredType;
-      if (!/^image\/(jpeg|png|webp|avif|gif|tiff)$/.test(contentType)) throw new Error(`返回内容不是受支持图片：${contentType || '未知类型'}`);
-      const blob = await imageResponse.blob();
-      if (!blob.size || blob.size > 25 * 1024 * 1024) throw new Error('图片为空或超过 25MB');
+      const { blob, contentType, finalUrl } = await fetchBrowserImage(task.sourceUrl, task.row.productUrl);
       const form = new FormData();
       form.append('itemId', task.backendItem.id);
       form.append('sourceUrl', task.sourceUrl);
-      form.append('finalUrl', imageResponse.url || task.sourceUrl);
+      form.append('finalUrl', finalUrl);
       form.append('image', blob, `browser-image.${contentType.split('/')[1].replace('jpeg', 'jpg')}`);
+      stage = 'local-upload';
       const upload = await backendFetch(`/workbench/collection-jobs/${encodeURIComponent(backendJob.id)}/browser-images`, { method: 'POST', body: form });
       if (!upload.ok) {
         const body = await upload.json().catch(() => ({}));
-        throw new Error(body.error || `本地图片导入返回 HTTP ${upload.status}`);
+        throw transferProblem(upload.status >= 500 ? 'LOCAL_UPLOAD_UNAVAILABLE' : 'LOCAL_UPLOAD_REJECTED', body.error || `本地图片导入返回 HTTP ${upload.status}`);
       }
       progress.success += 1;
     } catch (error) {
       progress.failed += 1;
-      if (progress.failures.length < 30) progress.failures.push({ sourceUrl: task.sourceUrl, message: error.message });
+      if (progress.failures.length < 30) progress.failures.push({ sourceUrl: task.sourceUrl, code: error.code || 'LOCAL_UPLOAD_FAILED', stage, message: error.message });
+      stopRound = stage === 'local-upload' && ['LOCAL_SERVICE_UNREACHABLE', 'LOCAL_SERVICE_TIMEOUT', 'CLIENT_PAIRING_EXPIRED', 'CLIENT_NOT_PAIRED', 'LOCAL_UPLOAD_UNAVAILABLE'].includes(error.code);
     }
+    progress.pending = progress.total - progress.success - progress.failed;
     await writeState({ status: 'uploading', backendJob, browserTransfer: progress });
+    if (stopRound) break;
   }
   return progress;
 }
@@ -402,14 +459,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         options: state.creationRequest?.optionsSnapshot || { ...state.options, ...(message.options || {}) }, status: 'uploading', lastError: '' });
       const backendJob = state.backendJob ? await backendFetch(`/workbench/collection-jobs/${encodeURIComponent(state.backendJob.id)}`).then(async (response) => {
         if (!response.ok) throw new Error('原采集任务暂不可读取，请检查客户端连接，不会自动创建重复任务');
-        return response.json();
+        return readJobResponse(response, state.backendJob.id);
       }) : await createBackendJob(state, verifiedConnection);
       await writeState({ status: 'uploading', backendJob, browserTransfer: { total: 0, success: 0, failed: 0, failures: [] } });
       const browserTransfer = state.options.browserSessionDownload === false ? null : await mirrorBrowserImages(state, backendJob);
       const lastError = browserTransfer?.failed
-        ? `有 ${browserTransfer.failed} 张图片无法通过当前登录会话回传；链接已保留，可在本地任务中继续下载。`
+        ? `回传未完成：失败 ${browserTransfer.failed} 张，未处理 ${browserTransfer.pending} 张。${browserTransfer.failures[0]?.message || '请查看失败明细'}。清单已保留，再次发送将跳过本机已保存图片。`
         : backendJob.creation?.replayed ? '已找回首次发送创建的任务，使用原规则继续回传；未重复建任务。' : '';
-      return await writeState({ status: 'completed', backendJob, browserTransfer, stopRequested: false, lastError });
+      return await writeState({ status: browserTransfer?.failed ? 'awaiting_transfer' : 'completed', backendJob, browserTransfer, stopRequested: false, lastError });
       } finally { transferring = false; }
     }
     if (message.type === 'start') {

@@ -95,7 +95,12 @@ export const api = {
   changePassword: (payload) => request('/auth/password', { method: 'POST', body: JSON.stringify(payload) }),
   getWorkspace: () => request('/platform/workspace'),
   getWorkbenchJobDetail: (id, page = 1) => request(`/workbench/jobs/${encodeURIComponent(id)}?page=${page}&pageSize=30`),
-  resumeSkuPack: (id, payload) => request(`/workbench/sku-packs/${encodeURIComponent(id)}/resume`, { method: 'POST', body: JSON.stringify(payload) }),
+  skuPackManifestUrl: id => `${API_BASE}/workbench/sku-packs/${encodeURIComponent(id)}/manifest`,
+  workbenchManifestUrl: id => `${API_BASE}/workbench/jobs/${encodeURIComponent(id)}/manifest`,
+  previewSkuManifestRepair: id => request(`/workbench/sku-packs/${encodeURIComponent(id)}/manifest-repair-preview`),
+  repairSkuManifest: (id, payload) => request(`/workbench/sku-packs/${encodeURIComponent(id)}/repair-manifest`, { method: 'POST', body: JSON.stringify(payload) }),
+    resumeSkuPack: (id, payload) => request(`/workbench/sku-packs/${encodeURIComponent(id)}/resume`, { method: 'POST', body: JSON.stringify(payload) }),
+    previewSkuPackResume: (id, retryFailed = false) => request(`/workbench/sku-packs/${encodeURIComponent(id)}/resume-preview?retryFailed=${retryFailed === true}`),
   createCommerceSandbox: (sourceId) => request('/platform/commerce-sandbox', { method: 'POST', body: JSON.stringify({ sourceId, mode: 'local-sandbox', confirm: true }) }),
   getCommerceSandbox: (id) => request(`/platform/commerce-sandbox/${encodeURIComponent(id)}`),
   runCommerceSandbox: (id, payload) => request(`/platform/commerce-sandbox/${encodeURIComponent(id)}/run`, { method: 'POST', body: JSON.stringify(payload) }),
@@ -511,6 +516,8 @@ export const api = {
     body: JSON.stringify({ rows, options })
   }),
   getCollectionJob: (jobId) => request(`/workbench/collection-jobs/${encodeURIComponent(jobId)}`),
+  previewCollectionPack: (jobId) => request(`/workbench/collection-jobs/${encodeURIComponent(jobId)}/sku-pack-preview`),
+  createCollectionPack: (jobId, payload) => request(`/workbench/collection-jobs/${encodeURIComponent(jobId)}/sku-pack`, { method: 'POST', body: JSON.stringify(payload) }),
   runCollectionJob: (jobId, options = {}) => request(`/workbench/collection-jobs/${encodeURIComponent(jobId)}/run`, {
     method: 'POST',
     body: JSON.stringify(options)

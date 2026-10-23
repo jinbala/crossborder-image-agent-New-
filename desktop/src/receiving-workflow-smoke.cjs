@@ -5,7 +5,7 @@ const {BrowserWindow}=require('electron');
 const hash=value=>createHash('sha256').update(value).digest('hex');
 async function wait(window,expression){for(let i=0;i<200;i++){if(await window.webContents.executeJavaScript(expression))return true;await new Promise(resolve=>setTimeout(resolve,50));}throw new Error(`Receiving workflow UI timed out: ${expression}`);}
 async function download(window,destination,selector){const done=new Promise((resolve,reject)=>{const timer=setTimeout(()=>{window.webContents.session.removeListener('will-download',save);reject(new Error('Collection ZIP download timed out'));},15000);function save(_event,item){item.setSavePath(destination);item.once('done',(_done,state)=>{clearTimeout(timer);state==='completed'?resolve():reject(new Error(`Collection download ${state}`));});}window.webContents.session.once('will-download',save);});await window.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(selector)}).click()`);await done;return fs.readFile(destination);}
-async function screenshot(window,file){await window.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');await require('./smoke-screenshot.cjs').smokeScreenshot(window,file);}
+async function screenshot(window,file){await require('./smoke-screenshot.cjs').smokeScreenshot(window,file);}
 
 async function receivingWorkflowSmoke({window,origin,dataRoot,requestApi}){
   const root=await fs.realpath(dataRoot),checks={};if(!root.split(path.sep).includes('.smoke-data')||path.basename(root)!=='workspace')throw new Error('Receiving tests require an owned smoke workspace');
@@ -35,6 +35,26 @@ async function receivingWorkflowSmoke({window,origin,dataRoot,requestApi}){
     checks.collectionNextStepDoesNotAutoProcess=await window.webContents.executeJavaScript('window.__receivingPosts===0');
   }finally{await window.webContents.executeJavaScript('window.fetch=window.__receivingFetch;void 0');}
 
+  const packInputs=images.map(entry=>({relativePath:`received/${entry.entryName.slice('images/'.length)}`,base64:entry.getData().toString('base64')}));
+  await window.webContents.executeJavaScript(`(()=>{window.__receivingPack={fetch:window.fetch,result:null,options:null,calls:0};window.fetch=async(input,options)=>{const route=new URL(typeof input==='string'?input:input.url,location.href);if(route.origin!==location.origin)throw new Error('Receiving fixture forbids remote calls');if(options?.method==='POST'&&route.pathname==='/api/workbench/sku-packs'){window.__receivingPack.options=JSON.parse(options.body.get('options'));if(window.__receivingPack.options.matteImages||window.__receivingPack.options.confirmPaidMatting)throw new Error('Receiving fixture forbids paid/remote matting');window.__receivingPack.calls++;}const response=await window.__receivingPack.fetch.call(window,input,options);if(options?.method==='POST'&&route.pathname==='/api/workbench/sku-packs')window.__receivingPack.result=await response.clone().json();return response;};const selection=new DataTransfer();for(const source of ${JSON.stringify(packInputs)}){const file=new File([Uint8Array.from(atob(source.base64),char=>char.charCodeAt(0))],source.relativePath.split('/').at(-1),{type:'image/png'});Object.defineProperty(file,'webkitRelativePath',{value:source.relativePath});selection.items.add(file);}const picker=document.querySelector('input[webkitdirectory]');picker.files=selection.files;picker.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  try{
+    await wait(window,`Array.from(document.querySelectorAll('button')).some(el=>el.innerText==='生成 SKU 图包'&&!el.disabled)`);
+    await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(el=>el.innerText==='生成 SKU 图包').click()`);
+    await wait(window,`window.__receivingPack.result?.status==='completed'&&document.body.innerText.includes('图包处理完成')`);
+    const pack=await window.webContents.executeJavaScript('window.__receivingPack.result');
+    checks.collectionZipFeedsSkuWorkflow=pack.summary.skuCount===13&&pack.summary.inputCount===13&&pack.summary.failedCount===0&&pack.summary.generatedSquareCount===13&&await window.webContents.executeJavaScript('window.__receivingPack.calls===1&&window.__receivingPack.options.matteImages===false');
+    const packBytes=await download(window,path.join(root,'collection-to-sku-ui.zip'),`a[href="${pack.downloadUrl}"]`),packZip=new(require('adm-zip'))(packBytes),originals=packZip.getEntries().filter(entry=>entry.entryName.includes('/originals/')&&!entry.isDirectory),squares=packZip.getEntries().filter(entry=>entry.entryName.includes('/square/')&&!entry.isDirectory);
+    const squareMeta=squares.length?await require('sharp')(squares[0].getData()).metadata():{};
+    checks.collectionSkuPackKeepsOriginals=originals.length===13&&originals.every(entry=>hash(entry.getData())===hash(png))&&squares.length===13&&squareMeta.width===1600&&squareMeta.height===1600;
+    await window.webContents.executeJavaScript(`document.querySelector(${JSON.stringify(`a[href="${pack.downloadUrl}"]`)}).scrollIntoView({block:'center'})`);
+    await screenshot(window,path.join(root,'collection-to-sku-result.png'));
+  }finally{await window.webContents.executeJavaScript('window.fetch=window.__receivingPack.fetch;delete window.__receivingPack;void 0');}
+
+  Object.assign(checks, await require('./direct-collection-pack-smoke.cjs').directCollectionPackSmoke({window,origin,dataRoot,requestApi,jobId:job.id,expectedImageHash:hash(png)}));
+  Object.assign(checks, await require('./collection-details-smoke.cjs').collectionDetailsSmoke({window,origin,dataRoot,requestApi}));
+  Object.assign(checks, await require('./sku-results-resume-smoke.cjs').skuResultsResumeSmoke({window,origin,dataRoot,requestApi}));
+  Object.assign(checks, await require('./report-details-i18n-smoke.cjs').reportDetailsI18nSmoke({window,origin,dataRoot,requestApi}));
+  Object.assign(checks, await require('./sku-manifest-recovery-smoke.cjs').skuManifestRecoverySmoke({window,origin,dataRoot,requestApi}));
   const probe=new BrowserWindow({width:420,height:650,useContentSize:true,show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});
   probe.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   try{
@@ -48,6 +68,11 @@ async function receivingWorkflowSmoke({window,origin,dataRoot,requestApi}){
     await probe.webContents.executeJavaScript(`elements.finishManual.click()`);await wait(probe,`elements.workflowStep.innerText.includes('第 3 步')&&!elements.finishManual.disabled`);
     checks.popupManualSendNextStep=await probe.webContents.executeJavaScript(`elements.openJob.style.display==='inline-block'&&elements.openJob.href==='crossborder-workbench://collection?jobId=popup-fixture-only'&&window.__popupFixture.calls.filter(type=>type==='finish-manual').length===1`);
     await screenshot(probe,path.join(root,'extension-popup-ready.png'));
+    await probe.webContents.executeJavaScript(`window.__popupFixture.state={...window.__popupFixture.state,status:'awaiting_transfer',browserTransfer:{total:3,success:1,failed:1,pending:1,failures:[{stage:'local-upload',code:'LOCAL_SERVICE_UNREACHABLE',message:'本机服务已断开，请检测连接并重新配对',sourceUrl:'https://fixture.invalid/private.png?token=not-a-real-secret'}]}};refresh();`);
+    await wait(probe,`elements.workflowStep.innerText.includes('回传未完成')`);
+    checks.popupPartialTransferRecovery=await probe.webContents.executeJavaScript(`elements.status.innerText.includes('未处理 1')&&elements.status.innerText.includes('本机接收 [LOCAL_SERVICE_UNREACHABLE]')&&!elements.status.innerText.includes('not-a-real-secret')&&!elements.finishManual.disabled&&window.__popupFixture.calls.filter(type=>type==='finish-manual').length===1`);
+    checks.popupPartialTransferActionsVisible=await probe.webContents.executeJavaScript(`['collectCurrent','finishManual','openJob'].every(id=>{const r=document.getElementById(id).getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight;})&&document.documentElement.scrollWidth<=innerWidth`);
+    await screenshot(probe,path.join(root,'extension-popup-transfer-recovery.png'));
     await probe.webContents.executeJavaScript(`window.__popupFixture.paired=false;window.__popupFixture.state.backendJob=null;refresh();`);await wait(probe,`elements.workflowStep.innerText.includes('展开“客户端连接”')`);
     await probe.webContents.executeJavaScript(`elements.finishManual.click()`);await wait(probe,`elements.connectionDetails.open&&elements.error.innerText.includes('不要清空')`);
     checks.popupUnpairedRecoveryVisible=await probe.webContents.executeJavaScript(`elements.finishManual.getBoundingClientRect().bottom<=innerHeight&&window.__popupFixture.state.rows.length===1&&window.__popupFixture.calls.filter(type=>type==='finish-manual').length===1`);

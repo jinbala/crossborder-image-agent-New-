@@ -625,7 +625,9 @@ export async function runCollectionJob(jobId, raw = {}, deps = {}) {
     const zipPath = await archiveImages(jobDir, manifest);
     manifest.downloadUrl = publicPath(zipPath);
     await checkpoint(jobDir, manifest);
-    return manifest;
+    // Transient control acknowledgement lets a client batch loop distinguish a
+    // manual stop from an ordinary checkpoint between batches. Never persist it.
+    return control.paused ? { ...manifest, stopRequested: control.cancelled ? 'cancel' : 'pause' } : manifest;
   } finally {
     controls.delete(jobId);
     await release();
@@ -637,6 +639,7 @@ export async function importBrowserImage(jobId, raw = {}) {
   const release = await acquireLock(jobDir);
   try {
     const manifest = await getCollectionJob(jobId);
+    if (manifest.status === 'cancelled') throw Object.assign(new Error('任务已取消，请在客户端明确恢复后再回传图片'), { statusCode: 409 });
     const item = manifest.items.find((candidate) => candidate.id === raw.itemId);
     if (!item) throw Object.assign(new Error('采集任务中不存在指定商品'), { statusCode: 404 });
     if (item.status === 'skipped') throw Object.assign(new Error('该商品已因过滤规则跳过，不能导入图片'), { statusCode: 409 });
@@ -697,13 +700,13 @@ export async function importBrowserImage(jobId, raw = {}) {
 export async function pauseCollectionJob(jobId, cancel = false) {
   assertResource('job', jobId);
   const control = controls.get(jobId);
-  if (control) { control.paused = true; control.cancelled = cancel; return { requested: true, message: '当前商品处理完成后停止，恢复点已保留' }; }
+  if (control) { control.paused = true; control.cancelled ||= cancel; return { requested: true, message: '当前商品处理完成后停止，恢复点已保留' }; }
   const directory = jobDirectory(jobId);
   const release = await acquireLock(directory);
   try {
     const manifest = await getCollectionJob(jobId);
     if (['completed', 'completed_with_errors'].includes(manifest.status)) throw Object.assign(new Error('任务已完成'), { statusCode: 409 });
-    manifest.status = cancel ? 'cancelled' : 'paused';
+    manifest.status = cancel || manifest.status === 'cancelled' ? 'cancelled' : 'paused';
     await checkpoint(directory, manifest);
     return { requested: true, manifest };
   } finally { await release(); }

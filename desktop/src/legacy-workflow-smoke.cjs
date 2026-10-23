@@ -4,15 +4,19 @@ async function waitFor(window, expression) {
   for (let i = 0; i < 180; i++) { if (await window.webContents.executeJavaScript(expression)) return true; await new Promise(resolve => setTimeout(resolve, 100)); }
   throw new Error(`旧工作流验收超时：${expression}`);
 }
-async function language(window, locale) {
+async function language(window, locale, mark) {
   await window.webContents.executeJavaScript(`(() => {const select=document.querySelector('select[aria-label="Interface language / 界面语言"]');select.value=${JSON.stringify(locale)};select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  if (mark) await mark('queue-fixture-language-dispatched');
   await waitFor(window, `document.documentElement.lang===${JSON.stringify(locale)}`);
+  if (mark) await mark('queue-fixture-language-applied');
 }
 async function click(window, label) {
   await window.webContents.executeJavaScript(`(() => {const node=Array.from(document.querySelectorAll('button')).find(item=>item.innerText===${JSON.stringify(label)});if(!node || node.disabled)throw new Error('Button unavailable: '+${JSON.stringify(label)});node.click();})()`);
 }
 async function legacyWorkflowSmoke({ window, origin, dataRoot, requestApi }) {
   const checks = {};
+  const mark = phase => fs.writeFile(path.join(dataRoot, 'legacy-workflow-progress.json'), JSON.stringify({ phase, at: new Date().toISOString(), url: window.webContents.getURL(), loading: window.webContents.isLoading(), completedChecks: Object.keys(checks) }, null, 2));
+  await mark('starting');
   const json = async (url, method = 'GET', body) => { const response = await requestApi(url, { method, headers: { 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) }); const result = await response.json(); if (!response.ok) throw new Error(`${method} ${url}: ${JSON.stringify(result.error)}`); return result; };
   const fixture = path.join(dataRoot, 'legacy-fixture-017');
   const sharp = require('sharp');
@@ -20,6 +24,7 @@ async function legacyWorkflowSmoke({ window, origin, dataRoot, requestApi }) {
   const imported = await json('/api/batches/import-folder', 'POST', { folderPath: fixture, name: '批量-017-原文', defaultTargets: [{ platformId: 'amazon', site: 'US', language: 'English', categoryId: 'generic_ecommerce' }] }), batchId = imported.batchTask.id;
   const batch = async () => (await json(`/api/batches/${batchId}`)).batchTask;
   const waitBatch = async (previousStart = null) => { for (let i = 0; i < 150; i++) { const current = await batch(); if (current.queue?.startedAt && current.queue.startedAt !== previousStart && ['completed', 'partial_failed', 'failed'].includes(current.queue.status)) return current; await new Promise(resolve => setTimeout(resolve, 100)); } throw new Error('Batch did not finish'); };
+  await mark('batch-ui');
   await window.loadURL(`${origin}/batches/${batchId}`); await language(window, 'en-US');
   checks.englishBatchPage = await waitFor(window, `document.querySelector('h1')?.innerText==='Batch SKU tasks' && document.body.innerText.includes('waits for human confirmation')`);
   await click(window, 'Start current batch'); const prepared = await waitBatch();
@@ -98,8 +103,11 @@ async function legacyWorkflowSmoke({ window, origin, dataRoot, requestApi }) {
   checks.acceptanceConfirmedIssueDeletion = await waitFor(window, '!document.querySelector("[data-acceptance-delete]")');
   await waitFor(window, `document.querySelector('[data-acceptance-workspace-status]')?.getAttribute('data-acceptance-workspace-status')==='saved'`);
   checks.acceptanceNoTaskMutation = stableTask((await json(`/api/tasks/${id}`)).task) === beforeAcceptance;
+  await mark('acceptance-screenshot');
   await require('./smoke-screenshot.cjs').smokeScreenshot(window, path.join(dataRoot, 'legacy-acceptance-english.png'));
+  await mark('acceptance-language');
   await language(window, 'zh-CN');
+  await mark('queue-fixture-read');
   // Controlled read-only responses exercise the actual renderer's cancellation
   // drain/poll transitions. Live-worker ordering is covered by backend barriers.
   const stableBatchBefore = JSON.stringify(await batch());
@@ -107,7 +115,9 @@ async function legacyWorkflowSmoke({ window, origin, dataRoot, requestApi }) {
   queueFixture.status = 'cancelled';
   queueFixture.queue = { ...queueFixture.queue, status: 'cancelled', totalJobs: 2, completedJobs: 0, failedJobs: 0, skippedJobs: 0, runningJobs: 1, pendingJobs: 1 };
   queueFixture.locks = { ...queueFixture.locks, isRunning: true };
+  await mark('queue-fixture-navigation');
   await window.loadURL(`${origin}/batches/${batchId}`);
+  await mark('queue-fixture-loaded');
   await waitFor(window, `Array.from(document.querySelectorAll('button')).some(node=>node.innerText==='刷新')`);
   await window.webContents.executeJavaScript(`(() => {
     window.__queueOriginalFetch=window.fetch;window.__queueFixtureMode='draining';window.__queueFixtureReads=0;window.__queueFixtureWrites=0;
@@ -126,14 +136,18 @@ async function legacyWorkflowSmoke({ window, origin, dataRoot, requestApi }) {
     };void 0;
   })()`);
   try {
+    await mark('queue-fixture-refresh');
     await click(window, '刷新');
     await waitFor(window, `Array.from(document.querySelectorAll('button')).some(node=>['展开高级操作','收起高级操作'].includes(node.innerText))`);
     if (await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('button')).some(node=>node.innerText==='展开高级操作')`)) await click(window, '展开高级操作');
     checks.queueDrainUiBlocksRestart = await waitFor(window, `document.querySelector('[data-queue-draining]') && ['开始队列','批量识别','应用平台 targets','批量生成方案','批量生成图片','批量审核'].every(label=>Array.from(document.querySelectorAll('button')).find(node=>node.innerText===label)?.disabled===true)`);
-    await language(window, 'en-US');
+    await mark('queue-fixture-english');
+    await language(window, 'en-US', mark);
     checks.queueDrainUiEnglishNotice = await waitFor(window, `document.querySelector('[data-queue-draining]')?.innerText.includes('unprocessed items are not counted as successes')`);
-    await window.webContents.executeJavaScript(`(() => {document.querySelector('[data-queue-draining]').scrollIntoView({block:'center'});return new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(resolve,200))));})()`);
-    await require('./smoke-screenshot.cjs').smokeScreenshot(window, path.join(dataRoot, 'queue-draining-english.png'));
+    await mark('queue-fixture-english-notice');
+    await mark('queue-fixture-screenshot');
+    await require('./smoke-screenshot.cjs').smokeScreenshot(window, path.join(dataRoot, 'queue-draining-english.png'), { selector: '[data-queue-draining]' });
+    await mark('queue-fixture-poll');
     await window.webContents.executeJavaScript(`window.__queueFixtureMode='settled';window.__queueBeforePoll=window.__queueFixtureReads;void 0`);
     checks.queueDrainUiPollsUntilReleased = await waitFor(window, `window.__queueFixtureReads>window.__queueBeforePoll && !document.querySelector('[data-queue-draining]') && Array.from(document.querySelectorAll('button')).find(node=>node.innerText==='Start queue')?.disabled===false`);
     checks.queueDrainUiNoBackendMutation = (await window.webContents.executeJavaScript('window.__queueFixtureWrites===0')) && JSON.stringify(await batch()) === stableBatchBefore;
@@ -141,6 +155,7 @@ async function legacyWorkflowSmoke({ window, origin, dataRoot, requestApi }) {
     await window.webContents.executeJavaScript('window.fetch=window.__queueOriginalFetch;void 0');
   }
   await language(window, 'zh-CN');
+  await mark('completed');
   return checks;
 }
 module.exports = { legacyWorkflowSmoke };

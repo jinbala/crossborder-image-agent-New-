@@ -75,8 +75,7 @@ async function exportIntegritySmoke({ window, origin, dataRoot, requestApi }) {
     const csv=zip.readAsText(`${result.packageId}/reports/listing-csv/amazon-listing.csv`);
     checks.structuredExportListingUsesExistingImages=errorRows.every(row=>!csv.includes(row.path));
     checks.structuredExportNoBusinessMutation=persistentSnapshot()===persistedBefore&&JSON.stringify((await json(`/api/batches/${batch.id}`)).batchTask)===JSON.stringify(batch)&&(await Promise.all(tasks.map(async task=>stableTask((await json(`/api/tasks/${task.id}`)).task)===stableTask(task)))).every(Boolean)&&await window.webContents.executeJavaScript(`window.__exportIntegrity.writes.length===1&&window.__exportIntegrity.writes[0].path.endsWith('/export-package')`);
-    await window.webContents.executeJavaScript(`document.querySelector('[data-export-package-card="readyImageCount"]').scrollIntoView({block:'center'});new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(resolve,200))))`);
-    await require('./smoke-screenshot.cjs').smokeScreenshot(window,path.join(root,'structured-export-final.png'));
+    await require('./smoke-screenshot.cjs').smokeScreenshot(window,path.join(root,'structured-export-final.png'),{selector:'[data-export-package-card="readyImageCount"]'});
     await window.webContents.executeJavaScript(`document.querySelector('[data-export-package-options] input').click()`);
     checks.structuredExportOptionChangeClearsStaleResult=await wait(window,`!document.querySelector('[data-export-package-result]')&&!document.querySelector('[data-export-package-card]')`);
     checks.structuredExportOptionChangeKeepsZip=(await fs.stat(downloaded)).size===result.bytes;

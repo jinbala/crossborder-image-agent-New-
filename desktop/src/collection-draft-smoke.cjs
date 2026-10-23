@@ -12,8 +12,7 @@ async function collectionDraftSmoke({ window, origin, requestApi, draftId, dataR
   await window.loadURL(`${origin}/workbench/collection`);
   await waitFor(window, 'Boolean(document.querySelector("[data-resume-collection]")) && document.querySelector("fieldset")?.disabled === true');
   if (dataRoot) {
-    const preview = await window.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true });
-    if (!preview.isEmpty()) await require('node:fs/promises').writeFile(require('node:path').join(dataRoot, 'collection-draft-preview.png'), preview.toPNG());
+    await require('./smoke-screenshot.cjs').smokeScreenshot(window, require('node:path').join(dataRoot, 'collection-draft-preview.png'));
   }
   await window.webContents.executeJavaScript(`(() => {
     const nativeFetch = window.fetch; let lost = false;

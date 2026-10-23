@@ -373,15 +373,15 @@ export default function ImagePlanPage() {
   const [threeSampleError, setThreeSampleError] = useState('');
   const [drafts, setDrafts] = useState({});
   const groupedPlans = useMemo(() => plansByTarget(task || {}), [task?.targets, task?.imagePlans]);
-  const templateAuditSections = useMemo(() => templateAuditDisplaySections(templateAudit), [templateAudit]);
-  const singleImageSections = useMemo(() => singleImageAcceptanceReportSections(singleImageReport), [singleImageReport]);
+  const templateAuditSections = useMemo(() => templateAuditDisplaySections(templateAudit, t), [templateAudit, t]);
+  const singleImageSections = useMemo(() => singleImageAcceptanceReportSections(singleImageReport, t), [singleImageReport, t]);
   const sourceImages = useMemo(() => (Array.isArray(task?.sourceImages) ? task.sourceImages : []), [task?.sourceImages]);
-  const threeSampleSections = useMemo(() => threeSampleGenerationSections(threeSampleReport), [threeSampleReport]);
+  const threeSampleSections = useMemo(() => threeSampleGenerationSections(threeSampleReport, t), [threeSampleReport, t]);
   const selectedThreeSamples = useMemo(() => threeSampleDrafts.slice(0, 3).map((sample, index) => ({
     ...sample,
     imageId: sample.imageId || sourceImages[index]?.id || sourceImages[0]?.id || ''
   })).filter((sample) => sample.imageId), [threeSampleDrafts, sourceImages]);
-  const threeSampleRunState = threeSampleCanRun({ confirmPaidApi: threeSampleConfirm, samples: selectedThreeSamples });
+  const threeSampleRunState = threeSampleCanRun({ confirmPaidApi: threeSampleConfirm, samples: selectedThreeSamples }, t);
 
   useEffect(() => {
     const nextDrafts = {};
@@ -490,7 +490,7 @@ export default function ImagePlanPage() {
 
   function downloadRuleAuditJson() {
     if (!templateAudit) return;
-    downloadTemplateAuditJson(templateAudit);
+    downloadTemplateAuditJson(templateAudit, { t });
   }
 
   async function runSingleImageGeneration() {
@@ -526,7 +526,7 @@ export default function ImagePlanPage() {
   }
 
   async function runThreeSampleGeneration() {
-    const runState = threeSampleCanRun({ confirmPaidApi: threeSampleConfirm, samples: selectedThreeSamples });
+    const runState = threeSampleCanRun({ confirmPaidApi: threeSampleConfirm, samples: selectedThreeSamples }, t);
     if (!runState.canRun) {
       setThreeSampleError(runState.reason);
       return;
@@ -595,7 +595,7 @@ export default function ImagePlanPage() {
             </div>
           )}
           <div className="rounded border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800">
-            {templateAuditExportNotice}
+            {t(templateAuditExportNotice)}
           </div>
           {templateAuditSections.ruleAuditEmptyText ? (
             <div className="rounded border border-slate-200 bg-slate-50 p-3 text-slate-500">
@@ -718,7 +718,7 @@ export default function ImagePlanPage() {
                 <div className="grid gap-3 lg:grid-cols-3">
                   {threeSampleSections.sampleCards.map((card) => (
                     <div key={card.sampleId} className="rounded border border-slate-200 bg-white p-3 text-xs text-slate-600">
-                      <div className="font-semibold text-ink">{card.sampleId} / {card.imageType}</div>
+                      <div className="font-semibold text-ink">{card.sampleId} / {card.imageTypeLabel}</div>
                       <div className="mt-1">{card.statusText}</div>
                       <div className="mt-1">{card.fallbackText}</div>
                       <div className="mt-1">{card.qualityText}</div>

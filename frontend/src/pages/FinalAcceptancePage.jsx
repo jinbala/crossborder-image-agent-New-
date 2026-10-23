@@ -1,4 +1,5 @@
 import { useLocale } from '../i18n/LocaleProvider.jsx';
+import { reportDisplayLabel } from '../utils/reportDisplayLabels.js';
 import { approvePaidOperation } from '../utils/paidOperationApproval.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAccount } from '../components/AuthGate.jsx';
@@ -119,8 +120,8 @@ export default function FinalAcceptancePage() {
   const [error, setError] = useState('');
   const currentDocument = useRef(null);
   currentDocument.current = { report, realApiReport, realApiForm, issueForm };
-  const display = useMemo(() => getFinalAcceptanceDisplayModel(report), [report]);
-  const realApiDisplay = useMemo(() => getRealApiAcceptanceDisplayModel(realApiReport), [realApiReport]);
+  const display = useMemo(() => getFinalAcceptanceDisplayModel(report, t), [report, t]);
+  const realApiDisplay = useMemo(() => getRealApiAcceptanceDisplayModel(realApiReport, t), [realApiReport, t]);
   const realApiPayload = useMemo(() => normalizeRealApiAcceptancePayload(realApiForm), [realApiForm]);
   const workspaceEditable = workspace.context?.editable && !['loading', 'blocked', 'conflict'].includes(workspace.status);
   const workspaceLabels = { loading: '正在读取已保存验收报告…', saved: '已保存到当前成员的验收工作区', dirty: '有修改待保存，请等待或点击立即保存', saving: '正在保存验收报告…', error: '保存失败，修改已保留，请重试保存或导出副本', conflict: '报告存在版本或权限冲突，未覆盖服务器记录', blocked: '验收工作区不可读取，请重试或检查备份' };
@@ -331,7 +332,7 @@ export default function FinalAcceptancePage() {
           {['main_image', 'feature_image', 'detail_image'].map((imageType) => (
             <label key={imageType} className="flex items-center gap-2">
               <input type="checkbox" checked={realApiPayload.imageTypes.includes(imageType)} onChange={() => toggleRealApiImageType(imageType)} />
-              {imageType}
+              {reportDisplayLabel('imageType', imageType, t)}
             </label>
           ))}
           <label className="flex items-center gap-2">
@@ -379,7 +380,7 @@ export default function FinalAcceptancePage() {
       {!display.emptyText && (
         <>
           <Section title={t("总览")}>
-            <div className="grid gap-3 md:grid-cols-7">
+            <div data-final-report-summary className="grid gap-3 md:grid-cols-7">
               {display.summaryCards.map((card) => (
                 <div key={card.label} className="rounded border border-slate-200 bg-white p-3">
                   <div className="text-xs text-slate-500">{t(card.label)}</div>
@@ -425,14 +426,14 @@ export default function FinalAcceptancePage() {
               <input className="rounded border border-slate-300 px-3 py-2 text-sm" placeholder={t("关联 taskId")} value={issueForm.relatedTaskId} onChange={(event) => setIssueForm({ ...issueForm, relatedTaskId: event.target.value })} />
               <input className="rounded border border-slate-300 px-3 py-2 text-sm" placeholder={t("关联 batchId")} value={issueForm.relatedBatchId} onChange={(event) => setIssueForm({ ...issueForm, relatedBatchId: event.target.value })} />
               <select className="rounded border border-slate-300 bg-white px-3 py-2 text-sm" value={issueForm.moduleKey} onChange={(event) => setIssueForm({ ...issueForm, moduleKey: event.target.value })}>
-                {finalAcceptanceIssueModules.map((moduleKey) => <option key={moduleKey} value={moduleKey}>{moduleKey}</option>)}
+                {finalAcceptanceIssueModules.map((moduleKey) => <option key={moduleKey} value={moduleKey}>{reportDisplayLabel('module', moduleKey, t)}</option>)}
               </select>
               <input className="rounded border border-slate-300 px-3 py-2 text-sm" placeholder={t("关联步骤 stepKey")} value={issueForm.stepKey} onChange={(event) => setIssueForm({ ...issueForm, stepKey: event.target.value })} />
               <select className="rounded border border-slate-300 bg-white px-3 py-2 text-sm" value={issueForm.severity} onChange={(event) => setIssueForm({ ...issueForm, severity: event.target.value })}>
-                {ISSUE_SEVERITIES.map((severity) => <option key={severity} value={severity}>{severity}</option>)}
+                {ISSUE_SEVERITIES.map((severity) => <option key={severity} value={severity}>{reportDisplayLabel('severity', severity, t)}</option>)}
               </select>
               <select className="rounded border border-slate-300 bg-white px-3 py-2 text-sm" value={issueForm.status} onChange={(event) => setIssueForm({ ...issueForm, status: event.target.value })}>
-                {ISSUE_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                {ISSUE_STATUSES.map((status) => <option key={status} value={status}>{reportDisplayLabel('status', status, t)}</option>)}
               </select>
               <label className="flex items-center gap-2 rounded border border-slate-300 px-3 py-2 text-sm text-slate-700">
                 <input type="checkbox" checked={issueForm.isBlockingFinalRelease} onChange={(event) => setIssueForm({ ...issueForm, isBlockingFinalRelease: event.target.checked })} />{t("阻断最终版")}</label>
@@ -450,10 +451,10 @@ export default function FinalAcceptancePage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <input className="min-w-[220px] flex-1 rounded border border-slate-300 px-2 py-1 text-sm font-semibold text-ink" value={issue.title} onChange={(event) => updateIssue(issue.issueId, { title: event.target.value })} />
                     <select className="rounded border border-slate-300 bg-white px-2 py-1 text-sm" value={issue.severity} onChange={(event) => updateIssue(issue.issueId, { severity: event.target.value })}>
-                      {ISSUE_SEVERITIES.map((severity) => <option key={severity} value={severity}>{severity}</option>)}
+                      {ISSUE_SEVERITIES.map((severity) => <option key={severity} value={severity}>{reportDisplayLabel('severity', severity, t)}</option>)}
                     </select>
                     <select className="rounded border border-slate-300 bg-white px-2 py-1 text-sm" value={issue.status} onChange={(event) => updateIssue(issue.issueId, { status: event.target.value })}>
-                      {ISSUE_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                      {ISSUE_STATUSES.map((status) => <option key={status} value={status}>{reportDisplayLabel('status', status, t)}</option>)}
                     </select>
                     <label className="flex items-center gap-1 text-xs text-slate-700">
                       <input type="checkbox" checked={issue.isBlockingFinalRelease} onChange={(event) => updateIssue(issue.issueId, { isBlockingFinalRelease: event.target.checked })} />{t("阻断最终版")}</label>
@@ -462,7 +463,7 @@ export default function FinalAcceptancePage() {
                   <div className="mt-2 grid gap-2 md:grid-cols-3">
                     <input className="rounded border border-slate-300 px-2 py-1 text-xs" value={issue.relatedSku} placeholder="SKU" onChange={(event) => updateIssue(issue.issueId, { relatedSku: event.target.value })} />
                     <select className="rounded border border-slate-300 bg-white px-2 py-1 text-xs" value={issue.moduleKey} onChange={(event) => updateIssue(issue.issueId, { moduleKey: event.target.value })}>
-                      {finalAcceptanceIssueModules.map((moduleKey) => <option key={moduleKey} value={moduleKey}>{moduleKey}</option>)}
+                      {finalAcceptanceIssueModules.map((moduleKey) => <option key={moduleKey} value={moduleKey}>{reportDisplayLabel('module', moduleKey, t)}</option>)}
                     </select>
                     <input className="rounded border border-slate-300 px-2 py-1 text-xs" value={issue.stepKey} placeholder="stepKey" onChange={(event) => updateIssue(issue.issueId, { stepKey: event.target.value })} />
                   </div>
@@ -484,7 +485,7 @@ export default function FinalAcceptancePage() {
                     <div className="mt-2 text-xs text-slate-700">
                       SKU: {row.skuCount || 0} / passed: {row.passedSku || 0} / pending: {row.pendingSku || 0} / blocked: {row.blockedSku || 0}
                     </div>
-                    <div className="mt-1 text-xs text-slate-700">{t("状态：")}{row.status || 'pending'}</div>
+                    <div className="mt-1 text-xs text-slate-700">{t("状态：")}{row.statusLabel}</div>
                   </div>
                 ))}
               </div>
@@ -513,8 +514,8 @@ export default function FinalAcceptancePage() {
                     <tr key={`${row.sku}-${index}`} className="border-b border-slate-100 align-top">
                       <td className="py-2 pr-3 font-medium text-ink">{row.sku}</td>
                       <td className="py-2 pr-3 text-slate-700">{row.productName || '-'}</td>
-                      <td className="py-2 pr-3 text-slate-700">{row.testAssetStatus}</td>
-                      <td className="py-2 pr-3 text-slate-700">{row.overallStatus}</td>
+                      <td className="py-2 pr-3 text-slate-700">{row.testAssetStatusLabel}</td>
+                      <td className="py-2 pr-3 text-slate-700">{row.overallStatusLabel}</td>
                       <td className="py-2 pr-3 text-slate-600">{row.stepSummary}</td>
                       <td className="py-2 pr-3 text-slate-600">{row.riskText}</td>
                       <td className="py-2 pr-3 text-slate-600">{row.nextSuggestedAction || '-'}</td>
@@ -532,9 +533,9 @@ export default function FinalAcceptancePage() {
             <div className="grid gap-3 md:grid-cols-3">
               {display.moduleRows.map((row) => (
                 <div key={row.moduleKey} className="rounded border border-slate-200 bg-white p-3 text-sm">
-                  <div className="font-semibold text-ink">{row.moduleName}</div>
+                  <div className="font-semibold text-ink">{row.moduleNameLabel}</div>
                   <div className="mt-1 text-xs text-slate-500">{row.moduleKey}</div>
-                  <div className="mt-2 text-xs text-slate-700">{t("状态：")}{row.status}</div>
+                  <div className="mt-2 text-xs text-slate-700">{t("状态：")}{row.statusLabel}</div>
                   <div className="mt-1 text-xs text-slate-600">issues：{Array.isArray(row.issues) && row.issues.length ? row.issues.join(' / ') : t("暂无")}</div>
                   <div className="mt-1 text-xs text-slate-600">notes：{row.notes || '-'}</div>
                   <div className="mt-3">

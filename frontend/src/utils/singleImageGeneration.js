@@ -1,3 +1,4 @@
+import { reportDisplayLabel, reportUi } from './reportDisplayLabels.js';
 const SECRET_PATTERNS = [
   [/[A-Z]:\\[^\s"',，。；;]+/gi, '[local-path-removed]'],
   [/\b[\w.-]*\.sqlite\b/gi, '[sqlite-path-removed]'],
@@ -58,15 +59,16 @@ function imageTypeFrom(report = {}) {
   return safeReport.meta?.imageType || safeReport.generationResult?.imageType || generationFrom(safeReport).imageType || 'main_image';
 }
 
-export function singleImageGenerationEmptyText(report) {
+export function singleImageGenerationEmptyText(report, t) {
   const safeReport = reportObject(report);
   if (!safeReport.singleImageGeneration && !safeReport.generationResult) {
-    return '暂无真实生图小样本结果。暂无单图生成报告，请先在生成页运行小样本生成。';
+    return reportUi(t)('暂无真实生图小样本结果。暂无单图生成报告，请先在生成页运行小样本生成。');
   }
   return '';
 }
 
-export function singleImageGenerationSections(report) {
+export function singleImageGenerationSections(report, t) {
+  const ui = reportUi(t), label = (kind, value) => reportDisplayLabel(kind, value, t);
   const safeReport = reportObject(report);
   const generation = generationFrom(safeReport);
   const generationResult = safeReport.generationResult || {};
@@ -74,7 +76,7 @@ export function singleImageGenerationSections(report) {
   const quality = safeReport.qualityScore || generation?.matting?.qualityScore || {};
   const issueCounts = issueCountsFrom(safeReport);
   const effectiveRules = safeReport.effectiveRulesSummary || safeReport.ruleAuditSummary?.effectiveRulesSummary || {};
-  const emptyText = singleImageGenerationEmptyText(safeReport);
+  const emptyText = singleImageGenerationEmptyText(safeReport, t);
   if (emptyText) {
     return {
       emptyText,
@@ -90,18 +92,18 @@ export function singleImageGenerationSections(report) {
   const fallbackUsed = generationResult.fallbackUsed ?? generation.fallbackUsed;
   return {
     emptyText: '',
-    resultText: `${imageTypeFrom(safeReport)} / ${generation.providerUsed || meta.generationProvider || '-'} / ${generationResult.status || generation.status || '-'} / ${generationResult.previewImage || generation.previewUrl || '-'}`,
-    auditText: `ruleAuditSummary：error ${issueCounts.error || 0} / warning ${issueCounts.warning || 0} / info ${issueCounts.info || 0}`,
-    qualityText: `qualityScore：${quality.score ?? 0} / ${quality.level || 'unknown'}`,
+    resultText: `${label('imageType', imageTypeFrom(safeReport))} / ${generation.providerUsed || meta.generationProvider || '-'} / ${label('status', generationResult.status || generation.status || '-')} / ${generationResult.previewImage || generation.previewUrl || '-'}`,
+    auditText: ui('ruleAuditSummary：error {error} / warning {warning} / info {info}', { error: issueCounts.error || 0, warning: issueCounts.warning || 0, info: issueCounts.info || 0 }),
+    qualityText: ui('qualityScore：{score} / {level}', { score: quality.score ?? 0, level: label('quality', quality.level || 'unknown') }),
     ruleText: `${effectiveRules.mainImageText || ''} ${effectiveRules.secondaryImageText || ''}`.trim(),
     cards: [
-      { label: 'imageType', value: imageTypeFrom(safeReport) },
+      { label: 'imageType', value: label('imageType', imageTypeFrom(safeReport)) },
       { label: 'provider', value: generation.providerUsed || meta.generationProvider || '-' },
       { label: 'model', value: generation.model || meta.modelName || '-' },
       { label: 'matting', value: meta.mattingProvider || generation.matting?.providerUsed || generation.matting?.requestedProvider || '-' },
       { label: 'qualityScore', value: String(quality.score ?? 0) },
-      { label: 'fallback', value: fallbackUsed ? '是' : '否' }
-    ],
+      { label: 'fallback', value: ui(fallbackUsed ? '是' : '否') }
+    ].map(card => ({ ...card, label: t ? ui(({ imageType: '图片类型', provider: 'Provider', model: '模型', matting: '抠图', qualityScore: '质量分', fallback: '回退' })[card.label]) : card.label })),
     warnings: [
       ...asArray(safeReport.warnings),
       ...asArray(generationResult.warnings),
@@ -110,12 +112,13 @@ export function singleImageGenerationSections(report) {
   };
 }
 
-export function singleImageAcceptanceReportSections(report) {
-  const base = singleImageGenerationSections(report);
+export function singleImageAcceptanceReportSections(report, t) {
+  const ui = reportUi(t), label = (kind, value) => reportDisplayLabel(kind, value, t);
+  const base = singleImageGenerationSections(report, t);
   if (base.emptyText) {
     return {
       ...base,
-      title: '真实生图验收报告',
+      title: ui('真实生图验收报告'),
       statusText: '',
       providerText: '',
       fallbackText: '',
@@ -140,15 +143,15 @@ export function singleImageAcceptanceReportSections(report) {
 
   return {
     ...base,
-    title: '真实生图验收报告',
-    statusText: `生成状态：${generationResult.status || generation.status || '-'} / 图片类型：${imageTypeFrom(safeReport)} / 输出类型：${generationResult.outputType || '-'}`,
-    providerText: `Provider：${meta.generationProvider || generation.providerUsed || '-'} / Model：${meta.modelName || generation.model || '-'} / Matting：${meta.mattingProvider || generation.matting?.providerUsed || '-'}`,
-    fallbackText: fallbackUsed ? `已触发 fallback：${generationResult.fallbackReason || generation.fallbackReason || '-'}` : 'fallback：未触发',
-    qualityText: `qualityScore：${quality.score ?? 0} / ${quality.level || 'unknown'} / warnings：${asArray(quality.warnings).length}`,
-    ruleAuditText: `ruleAuditSummary：error ${issueCounts.error || 0} / warning ${issueCounts.warning || 0} / info ${issueCounts.info || 0}`,
-    templateAuditText: `templateAudit：${templateKeys.join(' / ') || '暂无模板审计摘要'}`,
-    manualChecklistText: `manualChecklist：默认未检查，待人工确认 ${uncheckedCount} 项。`,
-    conclusionText: `conclusion：仅保留小样本实验=${conclusion.keepExperimentalOnly !== false} / 不允许批量=${conclusion.allowBatchGeneration === false} / 不进入正式生成=${conclusion.allowFormalGenerationUse === false}。${conclusion.recommendedNextAction || ''}`,
+    title: ui('真实生图验收报告'),
+    statusText: ui('生成状态：{status} / 图片类型：{type} / 输出类型：{output}', { status: label('status', generationResult.status || generation.status || '-'), type: label('imageType', imageTypeFrom(safeReport)), output: generationResult.outputType || '-' }),
+    providerText: ui('Provider：{provider} / Model：{model} / Matting：{matting}', { provider: meta.generationProvider || generation.providerUsed || '-', model: meta.modelName || generation.model || '-', matting: meta.mattingProvider || generation.matting?.providerUsed || '-' }),
+    fallbackText: fallbackUsed ? ui('已触发 fallback：{reason}', { reason: generationResult.fallbackReason || generation.fallbackReason || '-' }) : ui('fallback：未触发'),
+    qualityText: ui('qualityScore：{score} / {level} / warnings：{count}', { score: quality.score ?? 0, level: label('quality', quality.level || 'unknown'), count: asArray(quality.warnings).length }),
+    ruleAuditText: ui('ruleAuditSummary：error {error} / warning {warning} / info {info}', { error: issueCounts.error || 0, warning: issueCounts.warning || 0, info: issueCounts.info || 0 }),
+    templateAuditText: ui('templateAudit：{sections}', { sections: templateKeys.join(' / ') || ui('暂无模板审计摘要') }),
+    manualChecklistText: ui('manualChecklist：默认未检查，待人工确认 {count} 项。', { count: uncheckedCount }),
+    conclusionText: ui('conclusion：仅保留小样本实验={experimental} / 不允许批量={noBatch} / 不进入正式生成={noFormal}。{next}', { experimental: conclusion.keepExperimentalOnly !== false, noBatch: conclusion.allowBatchGeneration === false, noFormal: conclusion.allowFormalGenerationUse === false, next: conclusion.recommendedNextAction || '' }),
     warnings: base.warnings
   };
 }
@@ -189,26 +192,28 @@ export function downloadSingleImageGenerationJson(report, options = {}) {
   return { downloaded: true, fileName: name, json, blob };
 }
 
-export function threeSampleCanRun({ confirmPaidApi = false, samples = [] } = {}) {
+export function threeSampleCanRun({ confirmPaidApi = false, samples = [] } = {}, t) {
+  const ui = reportUi(t);
   const sampleCount = Array.isArray(samples) ? samples.length : 0;
-  if (!confirmPaidApi) {
-    return { canRun: false, reason: '请先确认这是小样本测试，并接受可能产生的 API 成本。' };
+  if (confirmPaidApi !== true) {
+    return { canRun: false, reason: ui('请先确认这是小样本测试，并接受可能产生的 API 成本。') };
   }
   if (sampleCount < 1) {
-    return { canRun: false, reason: '请至少选择 1 张样本图片。' };
+    return { canRun: false, reason: ui('请至少选择 1 张样本图片。') };
   }
   if (sampleCount > 3) {
-    return { canRun: false, reason: '三张小样本对比最多 3 张样本。' };
+    return { canRun: false, reason: ui('三张小样本对比最多 3 张样本。') };
   }
   return { canRun: true, reason: '' };
 }
 
-export function threeSampleGenerationSections(result) {
+export function threeSampleGenerationSections(result, t) {
+  const ui = reportUi(t), label = (kind, value) => reportDisplayLabel(kind, value, t);
   const aggregate = result?.aggregateReport || null;
   if (!aggregate) {
     return {
-      emptyText: '暂无三张小样本对比报告。请先选择样本并确认 API 成本提示后运行。',
-      title: '三张小样本对比',
+      emptyText: ui('暂无三张小样本对比报告。请先选择样本并确认 API 成本提示后运行。'),
+      title: ui('三张小样本对比'),
       summaryText: '',
       comparisonText: '',
       recommendationText: '',
@@ -220,9 +225,9 @@ export function threeSampleGenerationSections(result) {
   const sampleReports = Array.isArray(result.sampleReports) ? result.sampleReports : (aggregate.sampleReports || []);
   return {
     emptyText: '',
-    title: '三张小样本对比',
-    summaryText: `总数 ${summary.totalSamples || 0} / 成功 ${summary.successCount || 0} / 失败 ${summary.failedCount || 0} / fallback ${summary.fallbackCount || 0} / 平均质量分 ${summary.averageQualityScore ?? 0}`,
-    comparisonText: `最佳 ${comparison.bestSampleId || '-'} / 最弱 ${comparison.worstSampleId || '-'} / commonWarnings：${(comparison.commonWarnings || []).join('；') || '无'}`,
+    title: ui('三张小样本对比'),
+    summaryText: ui('总数 {total} / 成功 {success} / 失败 {failed} / fallback {fallback} / 平均质量分 {score}', { total: summary.totalSamples || 0, success: summary.successCount || 0, failed: summary.failedCount || 0, fallback: summary.fallbackCount || 0, score: summary.averageQualityScore ?? 0 }),
+    comparisonText: ui('最佳 {best} / 最弱 {worst} / commonWarnings：{warnings}', { best: comparison.bestSampleId || '-', worst: comparison.worstSampleId || '-', warnings: (comparison.commonWarnings || []).join('；') || ui('无') }),
     recommendationText: comparison.recommendation || aggregate.conclusion?.recommendedNextAction || '',
     sampleCards: sampleReports.map((sample, index) => {
       const meta = sample.meta || {};
@@ -232,11 +237,12 @@ export function threeSampleGenerationSections(result) {
       return {
         sampleId: sample.sampleId || meta.sampleId || `sample-${index + 1}`,
         imageType: meta.imageType || sample.imageType || '-',
-        statusText: `${generation.status || sample.status || '-'} / ${meta.generationProvider || sample.provider || '-'} / ${meta.modelName || sample.modelName || '-'}`,
-        fallbackText: generation.fallbackUsed || sample.fallbackUsed ? `fallback：${generation.fallbackReason || sample.fallbackReason || '-'}` : 'fallback：否',
-        qualityText: `qualityScore：${quality.score ?? 0} / ${quality.level || 'unknown'}`,
-        warningText: [...asArray(generation.warnings), ...asArray(quality.warnings), ...asArray(sample.warnings)].map(safeText).join('；') || '无 warnings',
-        ruleAuditText: `ruleAuditSummary：error ${issueCounts.error || 0} / warning ${issueCounts.warning || 0} / info ${issueCounts.info || 0}`,
+        imageTypeLabel: label('imageType', meta.imageType || sample.imageType || '-'),
+        statusText: `${label('status', generation.status || sample.status || '-')} / ${meta.generationProvider || sample.provider || '-'} / ${meta.modelName || sample.modelName || '-'}`,
+        fallbackText: generation.fallbackUsed || sample.fallbackUsed ? ui('fallback：{reason}', { reason: generation.fallbackReason || sample.fallbackReason || '-' }) : ui('fallback：否'),
+        qualityText: ui('qualityScore：{score} / {level}', { score: quality.score ?? 0, level: label('quality', quality.level || 'unknown') }),
+        warningText: [...asArray(generation.warnings), ...asArray(quality.warnings), ...asArray(sample.warnings)].map(safeText).join('；') || ui('无 warnings'),
+        ruleAuditText: ui('ruleAuditSummary：error {error} / warning {warning} / info {info}', { error: issueCounts.error || 0, warning: issueCounts.warning || 0, info: issueCounts.info || 0 }),
         conclusionText: sample.conclusion?.recommendedNextAction || aggregate.conclusion?.recommendedNextAction || ''
       };
     })

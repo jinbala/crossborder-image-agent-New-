@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { writeWorkbenchManifest } from './workbenchSnapshotService.js';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import AdmZip from 'adm-zip';
@@ -138,8 +139,7 @@ export async function previewTemplateFill(filePath, raw = {}) {
   await fs.writeFile(path.join(directory, 'plan.json'), serialized);
   const preview = { ...plan, name: `模板回填：${plan.originalName}`, status: 'waiting_user', updatedAt: plan.createdAt, previewHash,
     canExecute: planned.changes.length > 0 && planned.blocked.length === 0, manifestUrl: publicPath(path.join(directory, 'manifest.json')) };
-  await fs.writeFile(path.join(directory, 'manifest.json.tmp'), JSON.stringify(preview, null, 2));
-  await fs.rename(path.join(directory, 'manifest.json.tmp'), path.join(directory, 'manifest.json'));
+  await writeWorkbenchManifest(preview);
   indexTask(preview);
   return { id, previewHash, sheetName: selected.name, summary: planned.summary, changes: planned.changes, blocked: planned.blocked, canExecute: preview.canExecute };
 }
@@ -166,7 +166,7 @@ async function performTemplateFill(id, { previewHash, confirm = false } = {}) {
     summary: planned.summary, changes: planned.changes, blocked: planned.blocked,
     downloadUrl: publicPath(output), diffUrl: publicPath(path.join(directory, 'diff.json')) };
   await fs.writeFile(path.join(directory, 'diff.json'), JSON.stringify(report, null, 2));
-  await fs.writeFile(path.join(directory, 'manifest.json'), JSON.stringify(report, null, 2));
+  await writeWorkbenchManifest(report);
   indexTask(report);
   return report;
 }

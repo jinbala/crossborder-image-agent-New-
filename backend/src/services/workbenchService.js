@@ -8,6 +8,8 @@ import { paths } from './db.js';
 import { indexTask, refreshTaskIndex } from './taskCenterService.js';
 import { platformDb, pageOptions } from './platformStore.js';
 import { assertResource, resourceVisible, ownerSql } from './ownershipService.js';
+import { readSkuPackSnapshot } from './skuPackStateService.js';
+import { readWorkbenchSnapshot, snapshotReadNotice, writeWorkbenchManifest } from './workbenchSnapshotService.js';
 
 const WORKBENCH_DIR = path.join(paths.outputDir, 'workbench');
 const IMAGE_FORMATS = new Set(['jpeg', 'png', 'webp']);
@@ -84,8 +86,9 @@ export function normalizeImagePackOptions(input = {}) {
 }
 
 async function writeJson(filePath, value) {
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  if (path.basename(filePath) === 'manifest.json') indexTask(value);
+  if (path.basename(filePath) === 'manifest.json') {
+    await writeWorkbenchManifest(value); indexTask(value);
+  } else await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
 async function createZip(zipPath, imageDir, manifest) {
@@ -518,15 +521,19 @@ export async function recentWorkbenchJobs(limit = 20) {
 export async function workbenchJobDetail(id, query = {}) {
   assertResource('job', id);
   if (!/^[A-Za-z0-9_-]{1,180}$/.test(id)) throw Object.assign(new Error('任务 ID 无效'), { statusCode: 400 });
-  const directory = path.join(WORKBENCH_DIR, id);
-  let real; try { real = await fs.realpath(path.join(directory, 'manifest.json')); } catch { throw Object.assign(new Error('任务清单不存在，请从任务中心检查任务或备份'), { statusCode: 404 }); }
-  const relative = path.relative(WORKBENCH_DIR, real);
-  if (relative.startsWith('..') || path.isAbsolute(relative)) throw Object.assign(new Error('不能访问工作台之外的文件'), { statusCode: 403 });
-  const manifest = JSON.parse(await fs.readFile(real, 'utf8'));
+  if (id.startsWith('sku-pack-')) {
+    const snapshot = await readSkuPackSnapshot(id), { skuResults, ...summary } = snapshot.state;
+    const entries = skuResults.flatMap(group => group.items.map(item => ({ sku: group.sku, ...item })));
+    const { page, pageSize } = pageOptions(query);
+    return { ...summary, entries: entries.slice((page - 1) * pageSize, page * pageSize), pagination: { page, pageSize, total: entries.length, totalPages: Math.max(1, Math.ceil(entries.length / pageSize)) },
+      manifestUrl: `/api/workbench/sku-packs/${id}/manifest`,
+      manifestRead: snapshot.source !== 'primary' ? { source: snapshot.source, sourceName: snapshot.sourceName, sourceHash: snapshot.sourceHash, reason: snapshot.reason, readOnly: true, primaryUnchanged: true } : undefined };
+  }
+  const snapshot = await readWorkbenchSnapshot(id), manifest = snapshot.state;
   const entries = manifest.items || manifest.rows || manifest.changes || manifest.skuResults?.flatMap((sku) => sku.items.map((item) => ({ sku: sku.sku, ...item }))) || [];
   const { page, pageSize } = pageOptions(query);
   const { items, rows, changes, skuResults, ...summary } = manifest;
-  return { ...summary, entries: entries.slice((page - 1) * pageSize, page * pageSize), pagination: { page, pageSize, total: entries.length, totalPages: Math.max(1, Math.ceil(entries.length / pageSize)) }, manifestUrl: `/outputs/workbench/${id}/manifest.json` };
+  return { ...summary, entries: entries.slice((page - 1) * pageSize, page * pageSize), pagination: { page, pageSize, total: entries.length, totalPages: Math.max(1, Math.ceil(entries.length / pageSize)) }, manifestUrl: `/api/workbench/jobs/${id}/manifest`, manifestRead: snapshotReadNotice(snapshot) };
 }
 
 export function getWorkbenchOverview() {

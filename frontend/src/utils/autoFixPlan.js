@@ -26,15 +26,15 @@ export function sanitizeAutoFixPlan(value) {
   return value;
 }
 
-function asActionRows(actions) {
+function asActionRows(actions, t) {
   return asArray(actions).map((item) => ({
     ...item,
-    actionTypeLabel: actionTypeLabel(item.actionType),
+    actionTypeLabel: actionTypeLabel(item.actionType, t),
     selectable: false
   }));
 }
 
-function actionTypeLabel(actionType) {
+function actionTypeLabel(actionType, t) {
   const labels = {
     removeText: '删除违规文案',
     editTextLayout: '调整文字排版',
@@ -46,7 +46,7 @@ function actionTypeLabel(actionType) {
     skipMockOnly: 'mock 流程提示',
     noActionNeeded: '无需处理'
   };
-  return labels[actionType] || actionType || '-';
+  return Object.hasOwn(labels, actionType) ? (t || (value => value))(labels[actionType]) : actionType || '-';
 }
 
 function isSelectablePlannedAction(action = {}) {
@@ -54,10 +54,11 @@ function isSelectablePlannedAction(action = {}) {
   return action.actionType === 'editTextLayout' && (action.target?.imageType || action.imageType) === 'main_image';
 }
 
-export function getAutoFixPlanDisplayModel(plan) {
+export function getAutoFixPlanDisplayModel(plan, t) {
+  const ui = t || (value => value);
   if (!plan) {
     return {
-      emptyText: EMPTY_TEXT,
+      emptyText: ui(EMPTY_TEXT),
       summaryCards: [],
       plannedActions: [],
       manualActions: [],
@@ -65,38 +66,39 @@ export function getAutoFixPlanDisplayModel(plan) {
       mockOnlyActions: [],
       noActionNeededActions: [],
       warnings: [],
-      nextSuggestedAction: EMPTY_TEXT
+      nextSuggestedAction: ui(EMPTY_TEXT)
     };
   }
   const summary = plan.summary || {};
   const plannedActions = asArray(plan.plannedActions).map((item) => ({
     ...item,
-    actionTypeLabel: actionTypeLabel(item.actionType),
+    actionTypeLabel: actionTypeLabel(item.actionType, t),
     selectable: isSelectablePlannedAction(item)
   }));
   return {
-    emptyText: summary.totalFixSuggestions ? '' : EMPTY_TEXT,
+    emptyText: summary.totalFixSuggestions ? '' : ui(EMPTY_TEXT),
     summaryCards: [
       { label: '可自动修正候选', value: summary.autoFixCandidateCount || 0 },
       { label: '需人工确认', value: summary.manualConfirmRequiredCount || 0 },
       { label: 'mock 提示', value: summary.mockOnlyCount || 0 },
       { label: '无需处理', value: summary.noActionNeededCount || 0 },
       { label: '被阻止的自动操作', value: summary.blockedActionCount || 0 }
-    ],
+    ].map(card => ({ ...card, label: ui(card.label) })),
     plannedActions,
-    manualActions: asActionRows(plan.manualActions),
-    blockedActions: asActionRows(plan.blockedActions),
-    mockOnlyActions: asActionRows(plan.mockOnlyActions),
-    noActionNeededActions: asActionRows(plan.noActionNeededActions),
+    manualActions: asActionRows(plan.manualActions, t),
+    blockedActions: asActionRows(plan.blockedActions, t),
+    mockOnlyActions: asActionRows(plan.mockOnlyActions, t),
+    noActionNeededActions: asActionRows(plan.noActionNeededActions, t),
     warnings: asArray(plan.warnings),
-    nextSuggestedAction: plan.nextSuggestedAction || EMPTY_TEXT
+    nextSuggestedAction: plan.nextSuggestedAction || ui(EMPTY_TEXT)
   };
 }
 
-export function getAutoFixExecutionDisplayModel(executionResult) {
+export function getAutoFixExecutionDisplayModel(executionResult, t) {
+  const ui = t || (value => value);
   if (!executionResult) {
     return {
-      emptyText: '暂无修正执行结果。',
+      emptyText: ui('暂无修正执行结果。'),
       summaryCards: [],
       executedActions: [],
       skippedActions: [],
@@ -120,7 +122,7 @@ export function getAutoFixExecutionDisplayModel(executionResult) {
       { label: '跳过数量', value: summary.skippedCount || 0 },
       { label: '阻止数量', value: summary.blockedCount || 0 },
       { label: '失败数量', value: summary.failedCount || 0 }
-    ],
+    ].map(card => ({ ...card, label: ui(card.label) })),
     executedActions: asArray(executionResult.executedActions),
     skippedActions: asArray(executionResult.skippedActions),
     blockedActions: asArray(executionResult.blockedActions),

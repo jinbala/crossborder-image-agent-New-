@@ -32,7 +32,7 @@ test('UI translation has a readable fallback and preserves unknown business stri
 test('every English catalog message preserves its named interpolation fields and has no duplicate keys', () => {
   const fields = (text) => [...new Set([...text.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/g)].map((match) => match[1]))].sort();
   for (const [source, message] of Object.entries(english)) { assert.equal(typeof message, 'string'); assert.ok(message.trim()); assert.deepEqual(fields(message), fields(source), source); }
-  const keys = ['messages', 'operations', 'maintenance', 'imageWorkflow', 'taskOperations', 'legacyWorkflow', 'batchReports', 'exportReports'].flatMap((name) => {
+  const keys = ['messages', 'operations', 'maintenance', 'imageWorkflow', 'taskOperations', 'legacyWorkflow', 'batchReports', 'exportReports', 'reportDetails'].flatMap((name) => {
     const ast = parse(fs.readFileSync(new URL(`../src/i18n/${name}.js`, import.meta.url), 'utf8'), { sourceType: 'module' });
     return ast.program.body.find((node) => node.type === 'ExportNamedDeclaration').declaration.declarations[0].init.properties
       .filter((item) => item.type === 'ObjectProperty').map((item) => item.key.value);

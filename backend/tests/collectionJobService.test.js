@@ -13,12 +13,39 @@ import {
   originalImageUrl,
   getCollectionJob,
   pauseRunningCollections,
+  pauseCollectionJob,
+  importBrowserImage,
   runCollectionJob,
   safeRequestBuffer
 } from '../src/services/collectionJobService.js';
 import { WORKBENCH_DIR } from '../src/services/workbenchService.js';
 
 const cleanupPaths = [];
+
+test('collection returns transient manual pause acknowledgement and resumes only remaining rows', async () => {
+  const job=await createCollectionJob({rows:[1,2,3].map(id=>({sku:`STOP-${id}`,imageUrls:[`https://img.example/${id}.png`]})),options:{extraWaitMs:0}});
+  cleanupPaths.push(path.join(WORKBENCH_DIR,job.id));
+  const image=await sharp({create:{width:8,height:8,channels:3,background:'#ffffff'}}).png().toBuffer();let calls=0;
+  const stopped=await runCollectionJob(job.id,{limit:3},{imageFetcher:async()=>{calls++;await pauseCollectionJob(job.id);return image;}});
+  assert.equal(stopped.status,'paused');assert.equal(stopped.stopRequested,'pause');assert.equal(stopped.summary.pendingCount,2);assert.equal(calls,1);
+  assert.equal(Object.hasOwn(await getCollectionJob(job.id),'stopRequested'),false);
+  const resumed=await runCollectionJob(job.id,{limit:3},{imageFetcher:async()=>{calls++;return image;}});
+  assert.equal(resumed.status,'completed');assert.equal(resumed.summary.downloadedCount,3);assert.equal(calls,3);assert.equal(Object.hasOwn(resumed,'stopRequested'),false);
+});
+
+test('collection cancellation stays cancelled after pause, preserves checkpoints and rejects late browser uploads', async () => {
+  const job=await createCollectionJob({rows:[1,2].map(id=>({sku:`CANCEL-${id}`,imageUrls:[`https://img.example/${id}.png`]})),options:{extraWaitMs:0}});
+  cleanupPaths.push(path.join(WORKBENCH_DIR,job.id));
+  const image=await sharp({create:{width:8,height:8,channels:3,background:'#ffffff'}}).png().toBuffer();let calls=0;
+  const stopped=await runCollectionJob(job.id,{limit:2},{imageFetcher:async()=>{calls++;await pauseCollectionJob(job.id,true);await pauseCollectionJob(job.id,false);return image;}});
+  assert.equal(stopped.status,'cancelled');assert.equal(stopped.stopRequested,'cancel');assert.equal(stopped.summary.pendingCount,1);assert.equal(stopped.summary.downloadedCount,1);assert.equal(calls,1);
+  assert.equal((await pauseCollectionJob(job.id,false)).manifest.status,'cancelled');
+  const before=await fs.readFile(path.join(WORKBENCH_DIR,job.id,'manifest.json'),'utf8');
+  await assert.rejects(importBrowserImage(job.id,{itemId:job.items[1].id,sourceUrl:job.items[1].imageUrls[0]}),error=>error.statusCode===409&&error.message.includes('已取消'));
+  assert.equal(await fs.readFile(path.join(WORKBENCH_DIR,job.id,'manifest.json'),'utf8'),before);
+  const resumed=await runCollectionJob(job.id,{limit:2},{imageFetcher:async()=>{calls++;return image;}});
+  assert.equal(resumed.status,'completed');assert.equal(resumed.summary.downloadedCount,2);assert.equal(calls,2);
+});
 
 test('1000-row spreadsheet import and local validation completes within ten seconds', async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'collection-1000-')); cleanupPaths.push(directory);

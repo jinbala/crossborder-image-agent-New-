@@ -55,6 +55,11 @@ export function platformDb() {
       owner_id TEXT PRIMARY KEY, generation TEXT NOT NULL, draft_id TEXT UNIQUE,
       payload TEXT, job_id TEXT, created_at TEXT
     );
+    CREATE TABLE IF NOT EXISTS collection_pack_transfers (
+      owner_id TEXT NOT NULL, payload_hash TEXT NOT NULL, source_job_id TEXT NOT NULL,
+      job_id TEXT NOT NULL UNIQUE, source_json TEXT NOT NULL, created_at TEXT NOT NULL,
+      PRIMARY KEY(owner_id,payload_hash)
+    );
     CREATE TABLE IF NOT EXISTS acceptance_workspaces (
       owner_id TEXT PRIMARY KEY, generation TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0,
       payload TEXT, request_id TEXT, request_hash TEXT, updated_at TEXT
@@ -78,7 +83,7 @@ export function platformDb() {
   return connection;
 }
 
-const backupTables = ['platform_meta', 'members', 'sessions', 'audit_events', 'platform_records', 'record_revisions', 'task_index', 'space_archives', 'resource_owners', 'resource_assets', 'device_codes', 'devices', 'sync_receipts', 'oauth_pending', 'shop_connections', 'erp_grants', 'collection_requests', 'collection_drafts', 'acceptance_workspaces'];
+const backupTables = ['platform_meta', 'members', 'sessions', 'audit_events', 'platform_records', 'record_revisions', 'task_index', 'space_archives', 'resource_owners', 'resource_assets', 'device_codes', 'devices', 'sync_receipts', 'oauth_pending', 'shop_connections', 'erp_grants', 'collection_requests', 'collection_drafts', 'collection_pack_transfers', 'acceptance_workspaces'];
 export function platformBackup() { return platformDb().serialize(); }
 export function restorePlatformBackup(sourcePath) {
   assertNoCollectionCreation();

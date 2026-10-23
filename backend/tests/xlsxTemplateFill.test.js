@@ -34,6 +34,9 @@ test('template fill writes only a copy and preserves other entries, styles, form
   await assert.rejects(executeTemplateFill(preview.id, { previewHash: preview.previewHash }), /确认/);
   await assert.rejects(executeTemplateFill(preview.id, { confirm: true, previewHash: 'stale' }), /已变化/);
   const result = await executeTemplateFill(preview.id, { confirm: true, previewHash: preview.previewHash });
+  const primary = path.join(paths.outputDir, 'workbench', preview.id, 'manifest.json');
+  assert.deepEqual(await fs.readFile(primary), await fs.readFile(`${primary}.backup`));
+  assert.equal(JSON.parse(await fs.readFile(`${primary}.backup`)).status, 'completed');
   const output = new AdmZip(path.join(paths.rootDir, result.downloadUrl.slice(1)));
   assert.deepEqual(await fs.readFile(source), sourceBuffer);
   for (const entry of original.getEntries().filter((entry) => entry.entryName !== 'xl/worksheets/sheet1.xml')) assert.deepEqual(output.getEntry(entry.entryName).getData(), entry.getData());

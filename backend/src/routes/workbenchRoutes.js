@@ -23,10 +23,13 @@ import {
 import { archiveMaterialRecord } from '../services/workbenchMaterialService.js';
 import { inspectXlsxTemplate } from '../services/xlsxTemplateInspector.js';
 import { previewTemplateFill, executeTemplateFill } from '../services/xlsxTemplateFillService.js';
-import { createSkuPack, resumeSkuPack } from '../services/skuPackService.js';
+import { createSkuPack, resumeSkuPack, previewSkuPackResume, previewSkuManifestRepair, repairSkuManifest } from '../services/skuPackService.js';
+import { readSkuPackSnapshot } from '../services/skuPackStateService.js';
+import { readWorkbenchSnapshot } from '../services/workbenchSnapshotService.js';
 import { parseCollectionSpreadsheet, parseSkuMetadataSpreadsheet } from '../services/collectionSpreadsheetService.js';
 import { createCollectionJob, getCollectionJob, importBrowserImage, runCollectionJob } from '../services/collectionJobService.js';
 import { getCollectionDraftContext, stageCollectionDraft, submitCollectionDraft, clearCollectionDraft } from '../services/collectionDraftService.js';
+import { previewCollectionPack, createCollectionPack } from '../services/collectionPackService.js';
 
 const router = express.Router();
 const stagingDir = path.join(paths.uploadDir, 'workbench-staging');
@@ -118,8 +121,19 @@ router.get('/overview', (_req, res) => res.json(getWorkbenchOverview()));
 router.get('/jobs', asyncHandler(async (req, res) => {
   res.json(await recentWorkbenchJobs(req.query.limit));
 }));
-router.get('/jobs/:id', asyncHandler(async (req, res) => res.json(await workbenchJobDetail(req.params.id, req.query))));
+router.get('/jobs/:id', asyncHandler(async (req, res) => res.set('Cache-Control', 'no-store').json(await workbenchJobDetail(req.params.id, req.query))));
+router.get('/jobs/:id/manifest', asyncHandler(async (req, res) => {
+  const snapshot = req.params.id.startsWith('sku-pack-') ? await readSkuPackSnapshot(req.params.id) : await readWorkbenchSnapshot(req.params.id);
+  res.set('Cache-Control', 'no-store').attachment(`${req.params.id}-manifest.json`).type('application/json').send(snapshot.bytes);
+}));
 router.post('/sku-packs/:id/resume', asyncHandler(async (req, res) => res.json(await resumeSkuPack(req.params.id, req.body || {}))));
+router.get('/sku-packs/:id/resume-preview', asyncHandler(async (req, res) => res.json(await previewSkuPackResume(req.params.id, { retryFailed: req.query.retryFailed === 'true' }))));
+router.get('/sku-packs/:id/manifest', asyncHandler(async (req, res) => {
+  const snapshot = await readSkuPackSnapshot(req.params.id);
+  res.set('Cache-Control', 'no-store').attachment(`${req.params.id}-manifest.json`).type('application/json').send(snapshot.bytes);
+}));
+router.get('/sku-packs/:id/manifest-repair-preview', asyncHandler(async (req, res) => res.set('Cache-Control', 'no-store').json(await previewSkuManifestRepair(req.params.id))));
+router.post('/sku-packs/:id/repair-manifest', asyncHandler(async (req, res) => res.json(await repairSkuManifest(req.params.id, req.body || {}))));
 
 router.get('/materials', asyncHandler(async (req, res) => {
   res.json(await listMaterialRecords(req.query || {}));
@@ -265,6 +279,9 @@ router.post('/collection-jobs/:jobId/browser-images', browserImageUpload.single(
 router.get('/collection-jobs/:jobId', asyncHandler(async (req, res) => {
   res.json(await getCollectionJob(req.params.jobId));
 }));
+
+router.get('/collection-jobs/:jobId/sku-pack-preview', asyncHandler(async (req, res) => res.json(await previewCollectionPack(req.params.jobId))));
+router.post('/collection-jobs/:jobId/sku-pack', asyncHandler(async (req, res) => res.json(await createCollectionPack(req.params.jobId, req.body || {}))));
 
 router.post('/collection-jobs/:jobId/run', asyncHandler(async (req, res) => {
   res.json(await runCollectionJob(req.params.jobId, req.body || {}));

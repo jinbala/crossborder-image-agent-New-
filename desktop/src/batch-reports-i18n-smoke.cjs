@@ -49,8 +49,7 @@ async function batchReportsI18nSmoke({window,origin,dataRoot,requestApi}) {
     await window.webContents.executeJavaScript('document.querySelector("[data-sku-retry-preview]").click()'); await wait(window,`Boolean(document.querySelector('[data-sku-retry-step]'))`);
     await window.webContents.executeJavaScript(`(() => {const select=document.querySelector('[data-sku-retry-step]');select.value='imageGeneration';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await wait(window,`document.querySelector('[data-sku-retry-step]')?.value==='imageGeneration'`);
-    await window.webContents.executeJavaScript(`document.querySelector('[data-batch-review-summary]').scrollIntoView({block:'center'});new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(resolve,200))))`);
-    await require('./smoke-screenshot.cjs').smokeScreenshot(window,path.join(dataRoot,'batch-report-labels-english.png'));
+    await require('./smoke-screenshot.cjs').smokeScreenshot(window,path.join(dataRoot,'batch-report-labels-english.png'),{selector:'[data-batch-review-summary]'});
     const english=await download(window,path.join(dataRoot,'batch-report-ui-en.json'));
     await locale(window,'zh-CN'); await wait(window,`document.querySelector('[data-batch-review-summary]')?.innerText.includes('需人工复查 SKU')`);
     const chinese=await download(window,path.join(dataRoot,'batch-report-ui-zh.json'));

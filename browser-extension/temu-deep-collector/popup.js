@@ -15,6 +15,7 @@ function renderWorkflow() {
   else if (activeAction === 'send' || lastState?.status === 'uploading') elements.workflowStep.textContent = '正在发送图片到本机，请稍候；清单会保留，不需要重新采集。';
   else if (!count) elements.workflowStep.textContent = '第 1 步：打开商品页，再点“1. 采集当前商品”。';
   else if (!connection?.serviceUrl) elements.workflowStep.textContent = `清单已有 ${count} 个商品。第 2 步：展开“客户端连接”配对，再点“2. 发送到本地工作台”。`;
+  else if (lastState?.status === 'awaiting_transfer' && lastState?.browserTransfer?.failed) elements.workflowStep.textContent = '回传未完成，本地任务和清单已保留。先查看下方失败阶段；本机接收失败请检测连接并重新配对，图片站下载失败请人工检查授权和页面，再次发送会跳过本机已保存图片。';
   else if (lastState?.backendJob?.id) elements.workflowStep.textContent = '已有本地下载任务。第 3 步：点“3. 查看下载任务”检查图片；若仍有失败，可保留清单后重试发送。';
   else elements.workflowStep.textContent = `清单已有 ${count} 个商品。第 2 步：点“2. 发送到本地工作台”；允许图片域名权限后等待回传。`;
 }
@@ -54,7 +55,10 @@ function render(state) {
   const progress = state.status === 'manual' || (!(state.urls || []).length && (state.rows || []).length > 0)
     ? `手动清单：${(state.rows || []).length} 个商品`
     : `进度：${state.cursor || 0} / ${(state.urls || []).length}`;
-  const transfer = state.browserTransfer ? `\n登录态图片：成功 ${state.browserTransfer.success || 0}，失败 ${state.browserTransfer.failed || 0}，共 ${state.browserTransfer.total || 0}` : '';
+  const pending = state.browserTransfer ? Math.max(0, state.browserTransfer.pending ?? ((state.browserTransfer.total || 0) - (state.browserTransfer.success || 0) - (state.browserTransfer.failed || 0))) : 0;
+  const stages = { 'image-download': '图片站下载', 'local-upload': '本机接收', 'image-permission': '图片域名授权' };
+  const details = (state.browserTransfer?.failures || []).slice(0, 5).map((failure) => `\n${stages[failure.stage] || '图片回传'} [${failure.code || 'TRANSFER_FAILED'}]：${failure.message || '请检测连接后重试'}`).join('');
+  const transfer = state.browserTransfer ? `\n本轮图片：成功 ${state.browserTransfer.success || 0}，失败 ${state.browserTransfer.failed || 0}，未处理 ${pending}，共 ${state.browserTransfer.total || 0}${details}` : '';
   elements.status.textContent = `状态：${labels[state.status] || state.status}\n${progress}\n成功商品：${(state.rows || []).length}，失败：${(state.failures || []).length}${transfer}${state.lastError ? `\n提示：${state.lastError}` : ''}`;
   if (!nameInitialized) { if (state.options?.name) elements.name.value = state.options.name; nameInitialized = true; }
   const jobId = state.backendJob?.id;

@@ -6,7 +6,9 @@ import { taskOperations } from './taskOperations.js';
 import { legacyWorkflow } from './legacyWorkflow.js';
 import { batchReports } from './batchReports.js';
 import { exportReports } from './exportReports.js';
+import { reportDetails } from './reportDetails.js';
 export const english = {
+  '可下载完整只读恢复快照；查看和下载不会修复主清单、重做图片或执行任务。': 'Download the complete read-only recovery snapshot. Viewing and downloading never repair the primary manifest, reprocess images or execute tasks.',
   ...operations,
   ...maintenance,
   ...imageWorkflow,
@@ -14,6 +16,7 @@ export const english = {
   ...legacyWorkflow,
   ...batchReports,
   ...exportReports,
+  ...reportDetails,
   '跨境商品图片助手': 'Cross-border Image Workbench',
   '跨境图片工作台': 'Image Workbench',
   '界面语言': 'Interface language',

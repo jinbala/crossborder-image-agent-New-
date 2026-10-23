@@ -22,6 +22,16 @@ async function popup({ paired = true, allow = true, sendGate } = {}) {
 test('manual transfer view displays a manual count instead of the misleading 1 / 0 progress', async () => {
   const fixture = await popup(); assert.match(fixture.elements.status.textContent, /手动清单：1 个商品/); assert.doesNotMatch(fixture.elements.status.textContent, /1 \/ 0/);
 });
+
+test('partial transfer displays stages and pending counts but never renders signed image addresses', async () => {
+  const fixture = await popup();
+  fixture.state.backendJob = { id: 'existing-job' };
+  fixture.state.browserTransfer = { total: 3, success: 1, failed: 1, pending: 1, failures: [{ stage: 'local-upload', code: 'LOCAL_SERVICE_UNREACHABLE', message: '本机服务已断开', sourceUrl: 'https://img.example/private.png?token=private-signed-query' }] };
+  await fixture.refresh();
+  assert.match(fixture.elements.status.textContent, /未处理 1/); assert.match(fixture.elements.status.textContent, /本机接收/);
+  assert.match(fixture.elements.status.textContent, /LOCAL_SERVICE_UNREACHABLE/); assert.doesNotMatch(fixture.elements.status.textContent, /private-signed-query|private.png/);
+  assert.match(fixture.elements.workflowStep.textContent, /回传未完成/); assert.equal(fixture.elements.finishManual.disabled, false);
+});
 test('unpaired send preserves the list and does not request image permissions or create a task', async () => {
   const fixture = await popup({ paired: false }); await fixture.click('finishManual'); assert.match(fixture.elements.error.textContent, /先展开/); assert.equal(fixture.events.length, 0);
 });
@@ -40,6 +50,8 @@ test('the three manual actions precede pairing and collapsed advanced settings i
   for(const id of ['collectCurrent','finishManual','openJob'])assert.ok(html.indexOf(`id="${id}"`)<html.indexOf('id="connectionDetails"'));
   assert.match(html,/2\. 发送到本地工作台/);assert.match(html,/3\. 查看下载任务/);
   assert.doesNotMatch(html,/<details[^>]*id="(?:collectionSettings|automaticCollection)"[^>]*\bopen\b/);
+  const manifest = JSON.parse(await fs.readFile(new URL('../../browser-extension/temu-deep-collector/manifest.json', import.meta.url), 'utf8'));
+  assert.ok(html.includes(`<small>${manifest.version}</small>`));
 });
 
 test('next-step guidance follows the actual list and job, without treating pairing as a completed image transfer',async()=>{

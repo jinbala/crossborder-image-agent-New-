@@ -1,6 +1,6 @@
 {
   "name": "crossborder-image-desktop",
-  "version": "0.23.0",
+  "version": "0.29.0",
   "description": "跨境图片运营工作台 Windows 客户端",
   "author": "Crossborder Workbench",
   "private": true,
@@ -34,12 +34,35 @@
   "build": {
     "appId": "cn.crossborder.imageworkbench",
     "productName": "跨境图片工作台",
-    "protocols": [{ "name": "Crossborder Workbench", "schemes": ["crossborder-workbench"] }],
-    "directories": { "output": "release" },
-    "files": ["src/**", "runtime/**", "package.json"],
-    "asarUnpack": ["**/*.node", "**/sharp/**", "**/@img/**"],
+    "protocols": [
+      {
+        "name": "Crossborder Workbench",
+        "schemes": [
+          "crossborder-workbench"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**",
+      "runtime/**",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/*.node",
+      "**/sharp/**",
+      "**/@img/**"
+    ],
     "npmRebuild": true,
-    "win": { "target": ["nsis", "portable"], "signAndEditExecutable": false },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "signAndEditExecutable": false
+    },
     "nsis": {
       "oneClick": false,
       "perMachine": false,
@@ -48,6 +71,8 @@
       "createDesktopShortcut": true,
       "artifactName": "Crossborder-Workbench-Setup-${version}.${ext}"
     },
-    "portable": { "artifactName": "Crossborder-Workbench-Portable-${version}.${ext}" }
+    "portable": {
+      "artifactName": "Crossborder-Workbench-Portable-${version}.${ext}"
+    }
   }
 }

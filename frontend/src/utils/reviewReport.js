@@ -1,3 +1,4 @@
+import { reportDisplayLabel } from './reportDisplayLabels.js';
 const SEVERITY_ORDER = {
   fatal: 0,
   high: 1,
@@ -39,29 +40,30 @@ function rank(group = {}) {
   return SEVERITY_ORDER[group.severity] ?? 99;
 }
 
-export function getReviewReportDisplayModel(report) {
+export function getReviewReportDisplayModel(report, t) {
+  const ui = t || (value => value);
   if (!report) {
     return {
-      emptyText: EMPTY_TEXT,
+      emptyText: ui(EMPTY_TEXT),
       summaryCards: [],
       complianceGroups: [],
       mockHintGroups: [],
       fixSummaryCards: [],
       fixSuggestions: [],
       mockOnlyFixSuggestions: [],
-      nextSuggestedAction: EMPTY_TEXT,
+      nextSuggestedAction: ui(EMPTY_TEXT),
       recommendations: []
     };
   }
   const summary = report.summary || {};
   const fixSummary = report.fixSummary || {};
-  const groupedIssues = asArray(report.groupedIssues).slice().sort((a, b) => rank(a) - rank(b));
+  const groupedIssues = asArray(report.groupedIssues).slice().sort((a, b) => rank(a) - rank(b)).map(group => ({ ...group, severityLabel: reportDisplayLabel('severity', group.severity, t), imageTypeLabels: asArray(group.imageTypes).map(value => reportDisplayLabel('imageType', value, t)) }));
   const mockHintGroups = groupedIssues.filter((group) => group.severity === 'mockInfo' || String(group.groupKey || '').startsWith('mock:'));
   const complianceGroups = groupedIssues.filter((group) => !mockHintGroups.includes(group));
-  const fixSuggestions = asArray(report.fixSuggestions).slice().sort((a, b) => (a.priority || 99) - (b.priority || 99));
+  const fixSuggestions = asArray(report.fixSuggestions).slice().sort((a, b) => (a.priority || 99) - (b.priority || 99)).map(item => ({ ...item, actionTypeLabel: reportDisplayLabel('action', item.actionType, t), imageTypeLabels: (asArray(item.affectedImageTypes).length ? item.affectedImageTypes : [item.imageType || '-']).map(value => reportDisplayLabel('imageType', value, t)) }));
   const mockOnlyFixSuggestions = fixSuggestions.filter((suggestion) => suggestion.isMockOnly || suggestion.actionType === 'skipMockOnly');
   return {
-    emptyText: summary.totalIssues === 0 && !report.meta?.reviewMode ? EMPTY_TEXT : '',
+    emptyText: summary.totalIssues === 0 && !report.meta?.reviewMode ? ui(EMPTY_TEXT) : '',
     summaryCards: [
       { label: '致命风险', value: summary.fatalCount || 0, tone: 'red' },
       { label: '高风险', value: summary.highCount || 0, tone: 'orange' },
@@ -71,7 +73,7 @@ export function getReviewReportDisplayModel(report) {
       { label: 'mock 流程提示', value: summary.mockInfoCount || 0, tone: 'violet' },
       { label: '真实合规问题', value: summary.realComplianceIssueCount || 0, tone: 'red' },
       { label: 'mock 提示', value: summary.mockOnlyIssueCount || 0, tone: 'slate' }
-    ],
+    ].map(card => ({ ...card, label: ui(card.label) })),
     complianceGroups,
     mockHintGroups,
     fixSummaryCards: [
@@ -79,10 +81,10 @@ export function getReviewReportDisplayModel(report) {
       { label: '可自动修正候选', value: fixSummary.autoFixCandidateCount || 0 },
       { label: '需要人工确认', value: fixSummary.manualConfirmRequiredCount || 0 },
       { label: 'mock 提示', value: fixSummary.mockOnlyCount || 0 }
-    ],
+    ].map(card => ({ ...card, label: ui(card.label) })),
     fixSuggestions: fixSuggestions.filter((suggestion) => !mockOnlyFixSuggestions.includes(suggestion)),
     mockOnlyFixSuggestions,
-    nextSuggestedAction: report.nextSuggestedAction || EMPTY_TEXT,
+    nextSuggestedAction: report.nextSuggestedAction || ui(EMPTY_TEXT),
     recommendations: asArray(report.recommendations)
   };
 }

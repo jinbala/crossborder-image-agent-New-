@@ -6,7 +6,8 @@ import { ASSET_BASE, api } from '../services/api.js';
 import { useAccount } from '../components/AuthGate.jsx';
 import { assertCollectionDraftContext, recoverCollectionDraft } from '../utils/collectionDraft.js';
 import { Link } from 'react-router-dom';
-import { collectionResultGuide, collectionPreviewPage } from '../utils/collectionResults.js';
+import { collectionResultGuide, collectionPreviewPage, collectionStatuses, collectionStatusLabel, collectionItemsPage, collectionItemsCsv, collectionRunShouldStop } from '../utils/collectionResults.js';
+import { collectionPackLink } from '../utils/collectionPack.js';
 
 const DEFAULT_OPTIONS = {
   name: '',
@@ -18,17 +19,6 @@ const DEFAULT_OPTIONS = {
   maxAttempts: 3,
   downloadOriginal: true,
   randomFileNames: false
-};
-
-const STATUS_TEXT = {
-  queued: '等待执行',
-  running: '执行中',
-  paused: '已保存断点',
-  completed: '已完成',
-  completed_with_errors: '完成但有失败',
-  pending: '待处理',
-  failed: '失败',
-  skipped: '已跳过'
 };
 
 function parseRules(text) {
@@ -60,9 +50,16 @@ export default function CollectionWorkbenchPage() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [previewPage, setPreviewPage] = useState(1);
+  const [itemQuery, setItemQuery] = useState({ q: '', status: '', page: 1, pageSize: 25 });
   const [draftContext, setDraftContext] = useState(null);
   const [draftLoading, setDraftLoading] = useState(true);
   const creating = useRef(false);
+  const executing = useRef(false);
+
+  useEffect(() => {
+    setItemQuery({ q: '', status: '', page: 1, pageSize: 25 });
+    setPreviewPage(1);
+  }, [job?.id]);
 
   async function refreshDraft() {
     const next = assertCollectionDraftContext(await api.getCollectionDraft(), actorId);
@@ -126,15 +123,17 @@ export default function CollectionWorkbenchPage() {
   }
 
   async function runBatch({ retryFailed = false } = {}) {
-    if (!job) return;
+    if (!job || executing.current || !confirmResume()) return;
+    executing.current = true;
     setBusy(retryFailed ? 'retry' : 'run'); setError('');
     try { setJob(await api.runCollectionJob(job.id, { limit: 10, retryFailed })); }
     catch (runError) { setError(runError.message); }
-    finally { setBusy(''); }
+    finally { executing.current = false; setBusy(''); }
   }
 
   async function runContinuously() {
-    if (!job) return;
+    if (!job || executing.current || !confirmResume()) return;
+    executing.current = true;
     setBusy('all'); setError('');
     try {
       let current = job;
@@ -142,10 +141,23 @@ export default function CollectionWorkbenchPage() {
         const before = current.summary?.pendingCount || 0;
         current = await api.runCollectionJob(current.id, { limit: 10 });
         setJob(current);
+        if (collectionRunShouldStop(current)) break;
         if ((current.summary?.pendingCount || 0) >= before) break;
       }
     } catch (runError) { setError(runError.message); }
-    finally { setBusy(''); }
+    finally { executing.current = false; setBusy(''); }
+  }
+
+  function confirmResume() {
+    return job?.status !== 'cancelled' || window.confirm(t('此任务已取消。确认恢复未处理项或重试失败项？已完成图片不会重复下载。'));
+  }
+
+  function exportItems() {
+    const url = URL.createObjectURL(new Blob([collectionItemsCsv(job, itemQuery)], { type: 'text/csv;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url; link.download = `collection-${job.id.replace(/[^A-Za-z0-9_-]/g, '_')}-items.csv`;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   async function refresh() {
@@ -159,6 +171,7 @@ export default function CollectionWorkbenchPage() {
   const summary = job?.summary || {};
   const nextStep = collectionResultGuide(job);
   const previews = collectionPreviewPage(job, previewPage);
+  const itemPage = collectionItemsPage(job, itemQuery);
   const retryable = job?.items?.some((item) => ['failed', 'completed_with_errors'].includes(item.status) && item.attempts < (job.options?.maxAttempts || 3));
 
   return (
@@ -228,6 +241,7 @@ export default function CollectionWorkbenchPage() {
         <section data-collection-next-step={nextStep.kind} className="space-y-3 rounded-lg border-2 border-teal-600 bg-teal-50 p-4">
           <h2 className="font-semibold text-teal-950">{t(nextStep.title)}</h2>
           <p className="text-sm leading-6 text-teal-950">{t(nextStep.description)}</p>
+          {summary.downloadedCount > 0 && collectionPackLink(job.id) && <Link data-collection-pack-direct className="btn-primary inline-flex" to={collectionPackLink(job.id)}>{t('使用本任务图片整理图包')}</Link>}
           <div className="flex flex-wrap gap-3">{job.downloadUrl && <a data-collection-download className="btn-primary" href={`${ASSET_BASE}${job.downloadUrl}`} download>{t('下载当前 ZIP')}</a>}<Link to="/workbench/sku-pack" className="btn-secondary">{t('进入 SKU 图包处理')}</Link><Link to="/task-center" className="btn-secondary">{t('返回统一任务中心')}</Link></div>
         </section>
         <Section title={t('已收到的图片预览')}>
@@ -238,7 +252,7 @@ export default function CollectionWorkbenchPage() {
         </Section>
         <Section title={t("任务进度")} actions={<button type="button" onClick={refresh} disabled={Boolean(busy)} className="focus-ring inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-slate-500 hover:text-mint"><RefreshCw size={14} />{" " + t("刷新")}</button>}>
           <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-7">
-            {[['状态', t(STATUS_TEXT[job.status] || job.status)], ['总数', summary.inputCount || 0], ['完成', summary.completedCount || 0], ['有警告', summary.warningCount || 0], ['失败', summary.failedCount || 0], ['跳过', summary.skippedCount || 0], ['已下载', summary.downloadedCount || 0]].map(([label, value]) => <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 p-3"><div className="text-xs text-slate-500">{t(label)}</div><div className="mt-1 text-lg font-semibold text-ink">{value}</div></div>)}
+            {[['状态', t(collectionStatusLabel(job.status))], ['总数', summary.inputCount || 0], ['完成', summary.completedCount || 0], ['有警告', summary.warningCount || 0], ['失败', summary.failedCount || 0], ['跳过', summary.skippedCount || 0], ['已下载', summary.downloadedCount || 0]].map(([label, value]) => <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 p-3"><div className="text-xs text-slate-500">{t(label)}</div><div className="mt-1 text-lg font-semibold text-ink">{value}</div></div>)}
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             {summary.pendingCount > 0 && <button type="button" onClick={runContinuously} disabled={Boolean(busy)} className="focus-ring inline-flex items-center gap-2 rounded bg-mint px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy === 'all' ? <LoaderCircle className="animate-spin" size={17} /> : <Play size={17} />}{t("连续处理全部")}</button>}
@@ -251,7 +265,16 @@ export default function CollectionWorkbenchPage() {
         </Section>
 
         <Section title={t("商品明细")}>
-          <div className="max-h-[540px] overflow-auto"><table className="min-w-full text-left text-sm"><thead className="sticky top-0 bg-white"><tr className="border-b border-slate-200 text-xs text-slate-500"><th className="px-3 py-2">SKU</th><th className="px-3 py-2">{t("标题")}</th><th className="px-3 py-2">{t("销量")}</th><th className="px-3 py-2">{t("状态")}</th><th className="px-3 py-2">{t("图片")}</th><th className="px-3 py-2">{t("说明")}</th></tr></thead><tbody>{job.items.map((item) => <tr key={item.id} className="border-b border-slate-100"><td className="px-3 py-3 font-medium text-ink">{item.sku}</td><td className="max-w-xs truncate px-3 py-3 text-slate-600">{item.title || '-'}</td><td className="px-3 py-3 text-slate-600">{item.sales ?? '-'}</td><td className="px-3 py-3"><span className={item.status === 'completed' ? 'text-emerald-700' : item.status === 'failed' ? 'text-red-700' : item.status === 'skipped' ? 'text-slate-500' : 'text-amber-700'}>{t(STATUS_TEXT[item.status] || item.status)}</span></td><td className="px-3 py-3 text-slate-600">{(item.images || []).filter((image) => image.status === 'success').length}/{item.imageUrls?.length || 0}</td><td className="max-w-xs px-3 py-3 text-xs text-slate-500">{item.error?.message || item.pageWarning?.message || (item.status === 'completed' ? <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 size={13} />{t("完成")}</span> : '-')}</td></tr>)}</tbody></table></div>
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <input data-collection-item-search aria-label={t('搜索采集商品')} placeholder={t('SKU、标题、链接或错误原因')} value={itemQuery.q} onChange={event => setItemQuery(current => ({ ...current, q: event.target.value, page: 1 }))} className="focus-ring min-w-60 flex-1 rounded border p-2 text-sm" />
+            <select data-collection-item-status aria-label={t('商品处理状态')} value={itemQuery.status} onChange={event => setItemQuery(current => ({ ...current, status: event.target.value, page: 1 }))} className="rounded border p-2 text-sm"><option value="">{t('全部状态')}</option>{Object.entries(collectionStatuses).map(([status, label]) => <option key={status} value={status}>{t(label)}</option>)}</select>
+            <select data-collection-item-size aria-label={t('每页商品数')} value={itemQuery.pageSize} onChange={event => setItemQuery(current => ({ ...current, pageSize: Number(event.target.value), page: 1 }))} className="rounded border p-2 text-sm">{[25, 50, 100].map(size => <option key={size} value={size}>{t('每页 {count} 条', { count: size })}</option>)}</select>
+            <button data-collection-item-export type="button" className="btn-secondary" onClick={exportItems}>{t('导出筛选商品 CSV')}</button>
+          </div>
+          <p className="mb-3 text-xs text-slate-500">{t('CSV 包含全部筛选结果，不限当前页；状态代码和原始错误保留，公式样式文本添加安全前缀。')}</p>
+          <div className="max-h-[540px] overflow-auto"><table data-collection-items className="min-w-full text-left text-sm"><thead className="sticky top-0 bg-white"><tr className="border-b border-slate-200 text-xs text-slate-500"><th className="px-3 py-2">SKU</th><th className="px-3 py-2">{t("标题")}</th><th className="px-3 py-2">{t("销量")}</th><th className="px-3 py-2">{t("状态")}</th><th className="px-3 py-2">{t("图片")}</th><th className="px-3 py-2">{t("说明")}</th></tr></thead><tbody>{itemPage.items.map((item) => <tr data-collection-item={item.id} key={item.id} className="border-b border-slate-100"><td className="px-3 py-3 font-medium text-ink">{item.sku}</td><td className="max-w-xs truncate px-3 py-3 text-slate-600" title={item.title || ''}>{item.title || '-'}</td><td className="px-3 py-3 text-slate-600">{item.sales ?? '-'}</td><td className="px-3 py-3"><span className={item.status === 'completed' ? 'text-emerald-700' : item.status === 'failed' ? 'text-red-700' : item.status === 'skipped' ? 'text-slate-500' : 'text-amber-700'}>{Object.hasOwn(collectionStatuses, item.status) ? t(collectionStatusLabel(item.status)) : item.status}</span></td><td className="px-3 py-3 text-slate-600">{(item.images || []).filter((image) => image.status === 'success').length}/{item.imageUrls?.length || 0}</td><td className="max-w-xs px-3 py-3 text-xs text-slate-500">{item.error?.message || item.pageWarning?.message || (item.status === 'completed' ? <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 size={13} />{t("完成")}</span> : '-')}</td></tr>)}</tbody></table></div>
+          {!itemPage.total && <p data-collection-items-empty className="p-3 text-sm text-slate-500">{t('没有符合筛选条件的商品。')}</p>}
+          <div className="mt-3 flex items-center gap-3 text-sm"><button data-collection-item-prev type="button" className="btn-secondary" disabled={itemPage.page <= 1} onClick={() => setItemQuery(current => ({ ...current, page: itemPage.page - 1 }))}>{t('上一页')}</button><span data-collection-item-pagination>{t('第 {page} / {pages} 页 · 共 {total} 条', { page: itemPage.page, pages: itemPage.pages, total: itemPage.total })}</span><button data-collection-item-next type="button" className="btn-secondary" disabled={itemPage.page >= itemPage.pages} onClick={() => setItemQuery(current => ({ ...current, page: itemPage.page + 1 }))}>{t('下一页')}</button></div>
         </Section>
       </>}
     </div>

@@ -128,10 +128,8 @@ async function runRecoveryProbe({ window, dataRoot, requestApi, startupRecovery,
     checks.coldRecoveryRendererResponsive = ui.ticks >= 10 && ui.maxGapMs < 1000;
     checks.coldRecoveryNoAutoExecution = ui.writes === 0;
     window.webContents.invalidate();
-    await window.webContents.executeJavaScript('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(resolve,200))))');
     await require('./smoke-screenshot.cjs').smokeScreenshot(window, path.join(dataRoot, 'cold-recovery.png'));
-    await window.webContents.executeJavaScript(`document.querySelector('[data-recovery-index-status]').scrollIntoView({block:'start'});new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>setTimeout(resolve,200))))`);
-    await require('./smoke-screenshot.cjs').smokeScreenshot(window, path.join(dataRoot, 'cold-recovery-list.png'));
+    await require('./smoke-screenshot.cjs').smokeScreenshot(window, path.join(dataRoot, 'cold-recovery-list.png'), { selector: '[data-recovery-index-status]' });
   } finally {
     await window.webContents.executeJavaScript(`(() => {const state=window.__recoveryProbe;clearInterval(state.timer);window.fetch=state.fetch;delete window.__recoveryProbe;})()`);
   }
