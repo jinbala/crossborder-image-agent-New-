@@ -71,15 +71,23 @@ test('fill creates ordered new rows and rejects invalid mappings and protected w
 test('template multipart API requires approved preview and serves a filled copy', async () => {
   const response = await request(app).post('/api/workbench/template-fills/preview')
     .field('options', JSON.stringify({ platformId: 'amazon', records: [{ sku: 'HTTP-1', title: 'HTTP template', price: 3, stock: 10, mainImageUrl: 'https://example.org/main.png' }] }))
-    .attach('template', workbook().toBuffer(), { filename: 'http-template.xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }).expect(200);
+    .attach('template', workbook().toBuffer(), { filename: '恢复-业务原文.xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }).expect(200);
   cleanup.push(path.join(paths.outputDir, 'workbench', response.body.id));
   const saved = await request(app).get(`/api/workbench/jobs/${response.body.id}`).expect(200);
   assert.equal(saved.body.status, 'waiting_user'); assert.equal(saved.body.previewHash, response.body.previewHash);
+  assert.equal(saved.body.originalName, '恢复-业务原文.xlsx');
   assert.equal(saved.body.canExecute, true);
   assert.ok((await request(app).get('/api/platform/task-center?state=waiting_user').expect(200)).body.records.some((item) => item.id === response.body.id));
+  const savedBytes = await fs.readFile(path.join(paths.outputDir, 'workbench', response.body.id, 'manifest.json'));
+  const recovery = await request(app).get('/api/desktop/runtime?pageSize=100').expect(200);
+  const recovered = recovery.body.recovery.find(item => item.id === response.body.id);
+  assert.equal(recovered?.state, 'waiting_user'); assert.equal(recovered.href, `/results/${response.body.id}`);
+  assert.deepEqual(await fs.readFile(path.join(paths.outputDir, 'workbench', response.body.id, 'manifest.json')), savedBytes);
+  await assert.rejects(fs.access(path.join(paths.outputDir, 'workbench', response.body.id, 'filled-template.xlsx')), { code: 'ENOENT' });
   await request(app).post(`/api/workbench/template-fills/${response.body.id}/execute`).send({ previewHash: response.body.previewHash }).expect(400);
   const completed = await request(app).post(`/api/workbench/template-fills/${response.body.id}/execute`).send({ confirm: true, previewHash: response.body.previewHash }).expect(200);
   assert.equal(completed.body.status, 'completed');
   await request(app).get(completed.body.downloadUrl).expect(200);
   assert.equal(completed.body.summary.changedCells, 5);
+  assert.ok(!(await request(app).get('/api/desktop/runtime?pageSize=100').expect(200)).body.recovery.some(item => item.id === response.body.id));
 });

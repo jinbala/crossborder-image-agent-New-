@@ -8,6 +8,11 @@ import { batchReports } from './batchReports.js';
 import { exportReports } from './exportReports.js';
 import { reportDetails } from './reportDetails.js';
 export const english = {
+  '查看已保存的预览或计划，核对后手动确认；不会自动执行': 'Review the saved preview or plan and confirm manually. Nothing runs automatically.',
+  '从 SKU 恢复点继续，已完成 SKU 不重复': 'Resume from the SKU checkpoint without repeating completed SKUs.',
+  '选择断点继续或重试失败商品': 'Resume from a checkpoint or retry failed products.',
+  '仅本地模拟：核对差异并重新确认审批；不会写入真实店铺': 'Local simulation only: review differences and confirm approval again. No live shop writes.',
+  '查看任务详情并手动确认继续': 'Open task details and confirm manually before continuing.',
   '{count} 个历史任务从备份或结果包只读纳入索引；主清单未修复，任务未执行。': '{count} legacy tasks were indexed read-only from backups or published archives. Primary manifests were not repaired and tasks were not executed.',
   '此任务从恢复快照只读列出；请先查看详情并确认修复，不要直接继续。': 'This task is listed from a read-only recovery snapshot. Open its details and confirm repair before resuming.',
   '下一步：先确认修复采集主清单': 'Next: confirm repair of the collection manifest first',

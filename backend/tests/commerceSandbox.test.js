@@ -13,6 +13,11 @@ test('commerce sandbox requires current approval and retries failures without du
   const source = await preview();
   await assert.rejects(createCommerceSandbox({ sourceId: source.id, confirm: true, mode: 'live' }, actor), /真实店铺/);
   const job = await createCommerceSandbox({ sourceId: source.id, confirm: true, mode: 'local-sandbox', failOnceSkus: ['B'] }, actor);
+  const before = platformDb().prepare("SELECT data,version FROM platform_records WHERE id=?").get(job.id);
+  const recovery = (await request(app).get('/api/desktop/runtime?pageSize=100').expect(200)).body.recovery.find(item => item.id === job.id);
+  assert.equal(recovery?.state, 'waiting_user'); assert.equal(recovery.href, `/commerce-sandbox/${job.id}`);
+  assert.deepEqual(platformDb().prepare("SELECT data,version FROM platform_records WHERE id=?").get(job.id), before);
+  assert.equal(platformDb().prepare("SELECT count(*) AS n FROM platform_records WHERE kind='sandbox-receipt' AND json_extract(data,'$.jobId')=?").get(job.id).n, 0);
   await assert.rejects(runCommerceSandbox(job.id, { confirm: true, approvalHash: 'wrong' }, actor), /审批/);
   const partial = await runCommerceSandbox(job.id, { confirm: true, approvalHash: job.approvalHash }, actor);
   assert.equal(partial.state, 'partial'); assert.equal(partial.summary.successCount, 1); assert.equal(partial.summary.failedCount, 1); assert.equal(partial.summary.skippedCount, 1);
@@ -21,6 +26,7 @@ test('commerce sandbox requires current approval and retries failures without du
   await runCommerceSandbox(job.id, { confirm: true, approvalHash: job.approvalHash, retryFailed: true }, actor);
   assert.equal(platformDb().prepare("SELECT count(*) AS n FROM platform_records WHERE kind='sandbox-receipt' AND json_extract(data,'$.jobId')=?").get(job.id).n, 2);
   assert.equal(done.liveWritesEnabled, false);
+  assert.ok(!(await request(app).get('/api/desktop/runtime?pageSize=100').expect(200)).body.recovery.some(item => item.id === job.id));
 });
 test('commerce sandbox survives interruption, stops at item boundary and isolates owner', async () => {
   const source = await preview(), job = await createCommerceSandbox({ sourceId: source.id, confirm: true, mode: 'local-sandbox' }, actor);

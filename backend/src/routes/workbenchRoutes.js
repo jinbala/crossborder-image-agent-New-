@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { nanoid } from 'nanoid';
 import { asyncHandler } from '../utils/asyncHandler.js';
+import { decodeOriginalFileName } from '../utils/fileNameUtils.js';
 import { paths } from '../services/db.js';
 import {
   createCollectionPlan,
@@ -56,6 +57,7 @@ const templateUpload = multer({
   storage,
   limits: { files: 1, fileSize: 10 * 1024 * 1024 },
   fileFilter: (_req, file, callback) => {
+    file.originalname = decodeOriginalFileName(file.originalname);
     if (path.extname(file.originalname).toLowerCase() !== '.xlsx') {
       const error = new Error('目前只支持无宏的 .xlsx 模板');
       error.statusCode = 400;

@@ -1,7 +1,7 @@
 import { useLocale } from '../i18n/LocaleProvider.jsx';
 import { useEffect, useRef, useState } from 'react';
 import { useAccount } from '../components/AuthGate.jsx';
-import { createRecoveryLoader, recoveryIndexPending } from '../utils/desktopRecovery.js';
+import { createRecoveryLoader, recoveryIndexPending, recoveryStateMessage } from '../utils/desktopRecovery.js';
 import { Link, useNavigate } from 'react-router-dom';
 import Section from '../components/Section.jsx';
 import DesktopUpdates from '../components/DesktopUpdates.jsx';
@@ -88,7 +88,7 @@ export default function DesktopPage() {
         {runtime?.indexStatus?.recovered > 0 && <p data-recovery-snapshot-count className="mb-3 text-sm text-amber-800">{t('{count} 个历史任务从备份或结果包只读纳入索引；主清单未修复，任务未执行。', { count: runtime.indexStatus.recovered })}</p>}
         <p className="mb-3 text-sm text-slate-600">{t("恢复前先查看任务详情。涉及付费生成或平台操作的任务由你确认后继续。")}</p>
         <div data-recovery-index-status={runtime?.indexStatus?.status || 'loading'} data-recovery-loaded-page={runtime?.recoveryPagination?.page || 0} className="space-y-2">{runtime?.recovery?.map((item) => <div data-recovery-id={item.id} key={`${item.type}:${item.id}`} className="flex flex-wrap items-center justify-between gap-3 rounded border border-slate-200 p-3">
-          <div><p className="font-medium">{item.name} <span className="text-sm text-slate-500">{item.state}</span></p><p className="text-sm text-slate-500">{item.manifestRecovery?.readOnly === true ? t('此任务从恢复快照只读列出；请先查看详情并确认修复，不要直接继续。') : item.hint}</p></div><Link to={item.href} className="btn-secondary">{t("查看任务")}</Link>
+          <div><p className="font-medium">{item.name} <span data-recovery-state={item.state} className="text-sm text-slate-500">{t(recoveryStateMessage(item.state))}</span></p><p className="text-sm text-slate-500">{item.manifestRecovery?.readOnly === true ? t('此任务从恢复快照只读列出；请先查看详情并确认修复，不要直接继续。') : t(item.hint)}</p></div><Link to={item.href} className="btn-secondary">{t("查看任务")}</Link>
         </div>)}{runtime && !runtime.recovery.length && <p className="text-sm text-slate-500">{t("没有需要恢复的任务。")}</p>}</div>
         <div data-recovery-pager><Pager pagination={runtime?.recoveryPagination} onPage={setRecoveryPage} /></div>
       </Section>

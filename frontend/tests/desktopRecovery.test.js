@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { createRecoveryLoader, recoveryIndexPending } from '../src/utils/desktopRecovery.js';
+import { createRecoveryLoader, recoveryIndexPending, recoveryStateMessage } from '../src/utils/desktopRecovery.js';
+import { english } from '../src/i18n/messages.js';
 
 const runtime = (status='completed', page=1) => ({ indexStatus:{status}, recovery:[{id:`task-${page}`}], recoveryPagination:{page,pageSize:50,total:10000} });
 function clock() {
@@ -68,4 +69,14 @@ test('desktop recovery uses member/page-scoped loaders with separate errors and 
   assert.match(page,/\[recoveryPage, actorId\]/);assert.match(page,/loader\.dispose\(\)/);assert.match(page,/setRecoveryError\(null\)/);
   assert.match(page,/data-recovery-index-status/);assert.match(page,/data-recovery-pager/);
   assert.match(page,/recoveryIndexPending\(runtime\)/);assert.match(page,/历史任务索引未完成/);
+});
+
+test('recovery translates controlled states and hints without changing user titles', () => {
+  assert.equal(recoveryStateMessage('waiting_user'), '等待人工');
+  assert.equal(english[recoveryStateMessage('waiting_user')], 'Awaiting user');
+  assert.equal(recoveryStateMessage('future-state'), 'future-state');
+  for (const message of ['查看已保存的预览或计划，核对后手动确认；不会自动执行', '从 SKU 恢复点继续，已完成 SKU 不重复', '选择断点继续或重试失败商品', '仅本地模拟：核对差异并重新确认审批；不会写入真实店铺', '查看任务详情并手动确认继续']) assert.ok(english[message], message);
+  const page = fs.readFileSync(new URL('../src/pages/DesktopPage.jsx', import.meta.url), 'utf8');
+  assert.match(page, /t\(recoveryStateMessage\(item.state\)\)/); assert.match(page, /t\(item.hint\)/);
+  assert.doesNotMatch(page, /t\(item.name\)/);
 });

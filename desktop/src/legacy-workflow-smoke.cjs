@@ -31,6 +31,9 @@ async function legacyWorkflowSmoke({ window, origin, dataRoot, requestApi }) {
   const ids = prepared.skuTasks.filter(item => item.taskId).map(item => item.taskId);
   const recognized = await Promise.all(ids.map(async id => (await json(`/api/tasks/${id}`)).task));
   checks.batchPrepareWaitsForHuman = ids.length === 2 && recognized.every(item => item.status === 'recognized' && !item.productInfoConfirmed && !item.imagePlans.length);
+  const recoveryBeforeConfirm = await json('/api/desktop/runtime?pageSize=100');
+  checks.batchCompletedActionStillWaitsForHuman = prepared.queue.status === 'completed' && prepared.status === 'waiting_confirm' && recoveryBeforeConfirm.recovery.some(item => item.id === batchId && item.state === 'waiting_user');
+  checks.batchRecoveryOmitsImageDuplicates = !recoveryBeforeConfirm.recovery.some(item => ids.includes(item.id));
   const id = ids[0]; await window.loadURL(`${origin}/tasks/${id}/product`);
   await waitFor(window, `document.querySelector('h1')?.innerText==='Confirm product information'`);
   await window.webContents.executeJavaScript('window.confirm=()=>true; void 0'); await click(window, 'Save & continue');

@@ -7,11 +7,12 @@ import { MockImageProvider } from '../src/providers/mock/MockImageProvider.js';
 import request from 'supertest';
 import app from '../src/app.js';
 import { deleteBatch } from '../src/services/batchControlService.js';
+import { getDesktopRuntime } from '../src/services/desktopRuntimeService.js';
 
 async function fixture(name, run) {
   const batchId = `queue-lifecycle-${name}`;
   const ids = [0, 1].map(index => `${batchId}-${index}`);
-  for (const id of ids) await createTask({ id, status: 'uploaded', sourceImages: [] });
+  for (const id of ids) await createTask({ id, batchId, status: 'uploaded', sourceImages: [] });
   await createBatchTask({ id: batchId, status: 'imported', skuTasks: ids.map(taskId => ({ taskId, skuId: taskId, status: 'uploaded', queueStatus: 'pending' })) });
   const original = MockVisionProvider.prototype.recognize;
   let release, entered, calls = 0;
@@ -43,6 +44,19 @@ test('read-only runtime reports the active worker separately and is never persis
     assert.equal((await getBatchTask(batchId)).runtime,undefined);
     release();await execution;assert.equal(batchQueueRuntime(batchId).queueActive,false);
     assert.equal((await request(app).get(`/api/batches/${batchId}`).expect(200)).body.batchTask.runtime.queueActive,false);
+  });
+});
+
+test('finished recognition queue remains recoverable until human product confirmation', async () => {
+  await fixture('waiting-recovery', async ({ batchId, ids, release, execution }) => {
+    release(); await execution;
+    const record = await getBatchTask(batchId);
+    assert.equal(record.queue.status, 'completed'); assert.equal(record.status, 'waiting_confirm');
+    const before = JSON.stringify(record);
+    const runtime = await getDesktopRuntime({ pageSize: 100 });
+    assert.equal(runtime.recovery.find(item => item.id === batchId)?.state, 'waiting_user');
+    assert.ok(!runtime.recovery.some(item => ids.includes(item.id)));
+    assert.equal(JSON.stringify(await getBatchTask(batchId)), before);
   });
 });
 

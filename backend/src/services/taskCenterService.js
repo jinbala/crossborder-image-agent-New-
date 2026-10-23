@@ -18,11 +18,21 @@ export function normalizedState(status) {
   return ['draft', 'queued', 'running', 'waiting_user', 'paused', 'completed', 'partial', 'failed', 'cancelled'].includes(status) ? status : 'draft';
 }
 
+export function indexedTaskState(record) {
+  const businessState = normalizedState(record.status);
+  if (!record.queue?.status || record.queue.status === 'idle') return businessState;
+  const queueState = normalizedState(record.queue.status);
+  // A completed queue action (e.g. recognition) is not a completed business
+  // workflow. Keep its saved human-confirmation/error/cancellation outcome.
+  if (queueState === 'completed' && ['waiting_user', 'partial', 'failed', 'cancelled'].includes(businessState)) return businessState;
+  return queueState;
+}
+
 export function indexTask(record, kind = record.type || 'image', { registerOwner = true, preferNewer = false, manifestRecovery } = {}) {
   if (!record?.id) return;
   const db = platformDb();
   if (registerOwner && currentActor()) claimResource(['image', 'batch'].includes(kind) ? kind : 'job', record.id);
-  const state = normalizedState(record.queue?.status && record.queue.status !== 'idle' ? record.queue.status : record.status);
+  const state = indexedTaskState(record);
   const sku = record.productInfoConfirmed?.sku || record.productInfo?.sku || record.sku || '';
   const title = record.name || record.productInfoConfirmed?.name || record.productInfo?.name || record.options?.name || sku || record.id;
   const href = kind === 'batch' ? `/batches/${encodeURIComponent(record.id)}` : kind === 'image' ? `/tasks/${encodeURIComponent(record.id)}/product`
@@ -120,7 +130,7 @@ export async function rebuildLegacyIndex() {
 }
 export async function refreshTaskIndex() {
   const revision = meta('core-index-revision', 0);
-  if (meta('core-index-dirty', true) || meta('core-index-applied', -1) !== revision || meta('task-index-schema', 0) !== 2) {
+  if (meta('core-index-dirty', true) || meta('core-index-applied', -1) !== revision || meta('task-index-schema', 0) !== 3) {
     const core = await readDb();
     platformDb().transaction(() => {
       for (const task of core.tasks) indexTask(task, 'image', { registerOwner: false });
@@ -128,7 +138,7 @@ export async function refreshTaskIndex() {
       platformDb().prepare("DELETE FROM task_index WHERE kind IN ('image','batch') AND id NOT IN (SELECT value FROM json_each(?))").run(JSON.stringify([...core.tasks, ...core.batchTasks].map((item) => item.id)));
       setMeta('core-index-dirty', false);
       setMeta('core-index-applied', revision);
-      setMeta('task-index-schema', 2);
+      setMeta('task-index-schema', 3);
     })();
   }
   if (!meta('task-index-migrated', false)) startLegacyIndex();

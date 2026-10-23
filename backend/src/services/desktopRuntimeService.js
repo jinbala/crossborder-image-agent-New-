@@ -1,5 +1,5 @@
 import { listBatchTasks } from './db.js';
-import { refreshTaskIndex, legacyIndexStatus } from './taskCenterService.js';
+import { refreshTaskIndex, legacyIndexStatus, normalizedState, indexedTaskState } from './taskCenterService.js';
 import { platformDb, pageOptions } from './platformStore.js';
 import { ownerSql } from './ownershipService.js';
 import { pauseBatchQueue } from './batchQueueService.js';
@@ -7,29 +7,42 @@ import { pauseRunningCollections } from './collectionJobService.js';
 import { getStorageDriver } from '../storage/index.js';
 import { pauseRunningSkuPacks } from './skuPackService.js';
 
+const recoveryKinds = ['batch', 'image', 'collection-job', 'sku-pack', 'image-pack', 'collection-plan', 'studio', 'listing-dry-run', 'pricing-preview', 'template-fill', 'commerce-sandbox'];
+const recoveryStates = ['queued', 'running', 'waiting_user', 'paused', 'failed', 'partial'];
+function recoveryHint(kind, state) {
+  if (state === 'waiting_user') return '查看已保存的预览或计划，核对后手动确认；不会自动执行';
+  if (kind === 'sku-pack') return '从 SKU 恢复点继续，已完成 SKU 不重复';
+  if (kind === 'collection-job') return '选择断点继续或重试失败商品';
+  if (kind === 'commerce-sandbox') return '仅本地模拟：核对差异并重新确认审批；不会写入真实店铺';
+  return '查看任务详情并手动确认继续';
+}
+
 export function buildRecoveryItems({ batches = [], jobs = [], tasks = [] } = {}) {
   const result = [];
   for (const batch of batches) {
-    if (['running', 'paused', 'pending'].includes(batch.queue?.status)) result.push({
-      id: batch.id, type: 'batch', name: batch.name || batch.id, state: batch.queue.status,
+    const state = indexedTaskState(batch);
+    if (recoveryStates.includes(state)) result.push({
+      id: batch.id, type: 'batch', name: batch.name || batch.id, state,
       updatedAt: batch.updatedAt, href: `/batches/${encodeURIComponent(batch.id)}`,
-      hint: '查看批量任务，确认执行模式后继续'
+      hint: recoveryHint('batch', state)
     });
   }
   for (const job of jobs) {
-    if (['queued', 'pending', 'running', 'paused', 'failed', 'completed_with_errors'].includes(job.status)) result.push({
-      id: job.id, type: job.type || 'collection', name: job.name || job.options?.name || job.id,
-      state: job.status, updatedAt: job.updatedAt || job.createdAt,
-      href: job.type === 'collection-job' || !job.type ? `/workbench/collection?jobId=${encodeURIComponent(job.id)}` : `/results/${encodeURIComponent(job.id)}`,
-      hint: job.type === 'sku-pack' ? '打开图包恢复点，保留已完成 SKU，继续或重试失败 SKU' : '打开任务详情，选择断点继续或重试失败项'
+    const kind = job.type || 'collection-job', state = normalizedState(job.status || job.state);
+    if (recoveryKinds.includes(kind) && recoveryStates.includes(state)) result.push({
+      id: job.id, type: kind, name: job.name || job.options?.name || job.id,
+      state, updatedAt: job.updatedAt || job.createdAt,
+      href: kind === 'collection-job' ? `/workbench/collection?jobId=${encodeURIComponent(job.id)}` : kind === 'commerce-sandbox' ? `/commerce-sandbox/${encodeURIComponent(job.id)}` : `/results/${encodeURIComponent(job.id)}`,
+      hint: recoveryHint(kind, state)
     });
   }
   const batchTaskIds = new Set(batches.flatMap((batch) => (batch.skuTasks || []).map((item) => item.taskId)));
   for (const task of tasks) {
-    if (!batchTaskIds.has(task.id) && ['failed', 'recognizing', 'generating', 'reviewing'].includes(task.status)) result.push({
+    const state = normalizedState(task.status);
+    if (!batchTaskIds.has(task.id) && !task.batchId && recoveryStates.includes(state)) result.push({
       id: task.id, type: 'image', name: task.name || task.sku || task.id,
-      state: task.status, updatedAt: task.updatedAt,
-      href: `/tasks/${encodeURIComponent(task.id)}/product`, hint: '查看任务详情并手动确认重试'
+      state, updatedAt: task.updatedAt,
+      href: `/tasks/${encodeURIComponent(task.id)}/product`, hint: recoveryHint('image', state)
     });
   }
   return result.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
@@ -39,12 +52,13 @@ export async function getDesktopRuntime(query = {}) {
   await refreshTaskIndex();
   const { page, pageSize } = pageOptions({ ...query, pageSize: query.pageSize || 50 });
   const scope = ownerSql();
-  const where = `WHERE ${scope.clause} AND ((kind='batch' AND state IN ('queued','running','paused')) OR (kind IN ('collection-job','sku-pack') AND state IN ('queued','running','paused','failed','partial')) OR (kind='image' AND state IN ('running','failed') AND coalesce(json_extract(summary,'$.parentBatchId'),'')=''))`;
-  const db = platformDb(), total = db.prepare(`SELECT COUNT(*) AS n FROM task_index ${where}`).get(...scope.args).n;
-  const records = db.prepare(`SELECT * FROM task_index ${where} ORDER BY updated_at DESC,id LIMIT ? OFFSET ?`).all(...scope.args, pageSize, (page - 1) * pageSize);
+  const where = `WHERE ${scope.clause} AND kind IN (${recoveryKinds.map(() => '?').join(',')}) AND state IN (${recoveryStates.map(() => '?').join(',')}) AND (kind!='image' OR coalesce(json_extract(summary,'$.parentBatchId'),'')='')`;
+  const args = [...scope.args, ...recoveryKinds, ...recoveryStates];
+  const db = platformDb(), total = db.prepare(`SELECT COUNT(*) AS n FROM task_index ${where}`).get(...args).n;
+  const records = db.prepare(`SELECT * FROM task_index ${where} ORDER BY updated_at DESC,id LIMIT ? OFFSET ?`).all(...args, pageSize, (page - 1) * pageSize);
   const recovery = records.map((row) => ({ id: row.id, type: row.kind, name: row.title, state: row.state, updatedAt: row.updated_at, href: row.href,
     manifestRecovery: JSON.parse(row.summary).manifestRecovery,
-    hint: row.kind === 'sku-pack' ? '从 SKU 恢复点继续，已完成 SKU 不重复' : row.kind === 'collection-job' ? '选择断点继续或重试失败商品' : '查看任务详情并手动确认继续' }));
+    hint: recoveryHint(row.kind, row.state) }));
   return { desktop: Boolean(process.env.APP_DESKTOP_VERSION), version: process.env.APP_DESKTOP_VERSION || null,
     storageDriver: getStorageDriver(), recovery, recoveryPagination: { page, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
     indexStatus: legacyIndexStatus(), recoveryPolicy: 'manual', updatedAt: new Date().toISOString() };
