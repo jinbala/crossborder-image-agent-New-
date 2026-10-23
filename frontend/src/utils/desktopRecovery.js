@@ -8,15 +8,15 @@ export function recoveryIndexPending(runtime) {
 // One current page/request only. Historical indexing can outlive the first
 // response; poll its metadata, never resume a business task automatically.
 export function createRecoveryLoader({ getInfo = async () => null, getRuntime, onData, onError,
-  intervalMs = 1000, maxPollFailures = 3, timeoutMs = 8000,
+  intervalMs = 1000, initialPollMs = 100, maxInitialPolls = 5, maxPollFailures = 3, timeoutMs = 8000,
   schedule = setTimeout, cancel = clearTimeout } = {}) {
-  let generation = 0, disposed = false, timer, controller, previousRuntime = null, failures = 0;
+  let generation = 0, disposed = false, timer, controller, previousRuntime = null, failures = 0, initialPolls = 0;
   function later(page, ms) { timer = schedule(() => { void load(page, true); }, ms); }
   async function load(page = 1, polling = false) {
     if (disposed) return;
     cancel(timer); controller?.abort();
     const request = ++generation, current = new AbortController(); controller = current;
-    if (!polling) failures = 0;
+    if (!polling) { failures = 0; initialPolls = 0; }
     try {
       const signal = AbortSignal.any([current.signal, AbortSignal.timeout(timeoutMs)]);
       const [info, runtime] = await Promise.all([getInfo(), getRuntime(page, { signal })]);
@@ -27,7 +27,13 @@ export function createRecoveryLoader({ getInfo = async () => null, getRuntime, o
       }
       previousRuntime = runtime; failures = 0;
       onData?.({ info, runtime, page });
-      if (recoveryIndexPending(runtime)) later(page, intervalMs);
+      if (recoveryIndexPending(runtime)) {
+        // An empty first reply is normal while legacy indexing starts. Allow
+        // only a bounded short burst; populated pages use the normal cadence.
+        const initial = page === 1 && runtime.recovery.length === 0 && initialPolls < maxInitialPolls;
+        if (initial) initialPolls++;
+        later(page, initial ? Math.min(initialPollMs, intervalMs) : intervalMs);
+      }
       return runtime;
     } catch (error) {
       if (disposed || request !== generation) return;

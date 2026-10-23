@@ -20,6 +20,28 @@ test('pending historical scans refresh automatically and completed scans stop po
     assert.equal(recoveryIndexPending(runtime('failed')),false);assert.equal(recoveryIndexPending(),false);
   } finally {loader.dispose();}
 });
+test('empty initial recovery pages get only five quick read polls before normal cadence', async()=>{
+  const timer=clock();
+  const loader=createRecoveryLoader({...timer,getRuntime:async page=>({...runtime('running',page),recovery:[]})});
+  try {
+    await loader.load(1);
+    for(let index=0;index<5;index++){assert.equal([...timer.timers.values()][0].ms,100);await timer.tick();}
+    assert.equal([...timer.timers.values()][0].ms,1000);
+    await loader.load(2);assert.equal([...timer.timers.values()][0].ms,1000);
+    await loader.load(1);assert.equal([...timer.timers.values()][0].ms,100);
+  }finally{loader.dispose();assert.equal(timer.timers.size,0);}
+});
+
+test('the first indexed item ends quick polling and completed empty scans stop entirely', async()=>{
+  const timer=clock();let response={...runtime('pending'),recovery:[]};
+  const loader=createRecoveryLoader({...timer,getRuntime:async()=>response});
+  try {
+    await loader.load();assert.equal([...timer.timers.values()][0].ms,100);
+    response=runtime('running');await timer.tick();assert.equal([...timer.timers.values()][0].ms,1000);
+    response={...runtime('completed'),recovery:[]};await timer.tick();assert.equal(timer.timers.size,0);
+  }finally{loader.dispose();}
+});
+
 test('a late old page is aborted and cannot replace a newer recovery page', {timeout:3000},async()=>{
   const timer=clock(), results=[], pending=new Map(), signals=[];
   const loader=createRecoveryLoader({...timer,getRuntime:(page,{signal})=>{signals.push(signal);return new Promise(resolve=>pending.set(page,()=>resolve(runtime('completed',page))));},onData:({page})=>results.push(page)});

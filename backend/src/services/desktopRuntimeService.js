@@ -2,11 +2,7 @@ import { listBatchTasks } from './db.js';
 import { refreshTaskIndex, legacyIndexStatus, normalizedState, indexedTaskState } from './taskCenterService.js';
 import { platformDb, pageOptions } from './platformStore.js';
 import { ownerSql } from './ownershipService.js';
-import { pauseBatchQueue } from './batchQueueService.js';
-import { pauseRunningCollections } from './collectionJobService.js';
 import { getStorageDriver } from '../storage/index.js';
-import { pauseRunningSkuPacks } from './skuPackService.js';
-import { pauseRunningImagePacks } from './imagePackRecoveryService.js';
 
 const recoveryKinds = ['batch', 'image', 'collection-job', 'sku-pack', 'image-pack', 'collection-plan', 'studio', 'listing-dry-run', 'pricing-preview', 'template-fill', 'commerce-sandbox'];
 const recoveryStates = ['queued', 'running', 'waiting_user', 'paused', 'failed', 'partial'];
@@ -66,6 +62,10 @@ export async function getDesktopRuntime(query = {}) {
 }
 
 export async function pauseAllQueues() {
+  const [{ pauseBatchQueue }, { pauseRunningCollections }, { pauseRunningSkuPacks }, { pauseRunningImagePacks }] = await Promise.all([
+    import('./batchQueueService.js'), import('./collectionJobService.js'),
+    import('./skuPackService.js'), import('./imagePackRecoveryService.js')
+  ]);
   const batches = (await listBatchTasks()).filter((batch) => batch.queue?.status === 'running');
   const results = await Promise.allSettled(batches.map((batch) => pauseBatchQueue(batch.id)));
   return { requested: batches.length, paused: results.filter((result) => result.status === 'fulfilled').length,
