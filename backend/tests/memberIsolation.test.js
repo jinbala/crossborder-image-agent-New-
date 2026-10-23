@@ -32,6 +32,28 @@ beforeEach(async () => {
 });
 afterEach(() => { process.env.WEB_AUTH_ENABLED = 'false'; });
 
+test('collection repair HTTP preview is owner scoped and mutation requires role, CSRF and bound approval', async () => {
+  const job = (await call(alice, 'post', '/api/workbench/collection-jobs/rows').send({ rows: [{ imageUrls: ['https://fixture.invalid/owned.png'] }], options: {} }).expect(201)).body;
+  const main = path.join(paths.outputDir, 'workbench', job.id, 'manifest.json');
+  await fs.writeFile(main, '{owned damaged');
+  const route = `/api/workbench/collection-jobs/${job.id}`;
+  for (const suffix of ['', '/manifest-repair-preview']) {
+    await call(alice, 'get', `${route}${suffix}`).expect(200);
+    for (const actor of [bob, viewer]) await call(actor, 'get', `${route}${suffix}`).expect(404);
+    await request(app).get(`${route}${suffix}`).expect(401);
+  }
+  const preview = (await call(alice, 'get', `${route}/manifest-repair-preview`).expect(200)).body;
+  const payload = { confirm: true, previewHash: preview.previewHash, sourceHash: preview.sourceHash };
+  await request(app).post(`${route}/repair-manifest`).set('Cookie', alice.cookie).send(payload).expect(403);
+  await call(viewer, 'post', `${route}/repair-manifest`).send(payload).expect(403);
+  await call(bob, 'post', `${route}/repair-manifest`).send(payload).expect(404);
+  assert.equal(await fs.readFile(main, 'utf8'), '{owned damaged');
+  const result = (await call(alice, 'post', `${route}/repair-manifest`).send(payload).expect(200)).body;
+  assert.equal(result.repaired, true); assert.equal(result.imagesProcessed, 0);
+  assert.equal(await fs.readFile(path.join(path.dirname(main), result.preservedDamaged), 'utf8'), '{owned damaged');
+  assert.equal(JSON.parse(await fs.readFile(main)).id, job.id);
+});
+
 test('generic recovered manifests enforce HTTP session ownership and permit only an owned read-only download', async () => {
   const plan = (await call(alice, 'post', '/api/workbench/collection-plans').send({ urls: ['https://example.com/private-item'] }).expect(201)).body;
   const main = path.join(paths.outputDir, 'workbench', plan.id, 'manifest.json'); await fs.writeFile(main, '{private damaged primary');

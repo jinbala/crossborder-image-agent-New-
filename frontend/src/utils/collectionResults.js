@@ -1,3 +1,5 @@
+import { collectionSnapshotReadOnly } from './collectionManifestRecovery.js';
+
 const count=value=>Number.isFinite(Number(value))&&Number(value)>0?Math.floor(Number(value)):0;
 
 export const collectionStatuses = Object.freeze({
@@ -57,6 +59,7 @@ export function collectionPreviewUrl(jobId,url){
 }
 
 export function collectionResultGuide(job){
+  if(collectionSnapshotReadOnly(job))return {kind:'recovery',title:'下一步：先确认修复采集主清单',description:'请先预览并确认修复采集主清单，再继续下载或浏览器回传。修复保留损坏副本，不处理图片、不重建 ZIP，也不自动继续任务。'};
   const summary=job?.summary||{},downloaded=count(summary.downloadedCount),pending=count(summary.pendingCount),failed=count(summary.failedCount)+count(summary.warningCount);
   if(job?.status==='cancelled')return {kind:'cancelled',title:'任务已取消，已有图片和断点保留',description:'不会自动继续下载。可下载已有 ZIP 或导出商品明细；如需恢复，请明确点击处理按钮并确认。'};
   if(pending)return {kind:'pending',title:'下一步：等待回传或补齐下载',description:'先等扩展发送结束再刷新；仍有待处理商品时，可点“连续处理全部”。不要重新建立相同任务。'};

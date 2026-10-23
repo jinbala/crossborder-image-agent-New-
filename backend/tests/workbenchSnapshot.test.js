@@ -9,6 +9,7 @@ import app from '../src/app.js';
 import { WORKBENCH_DIR, createCollectionPlan, createPricingPreview, workbenchJobDetail } from '../src/services/workbenchService.js';
 import { readWorkbenchSnapshot, writeWorkbenchManifest } from '../src/services/workbenchSnapshotService.js';
 import { withActor, claimResource } from '../src/services/ownershipService.js';
+import { normalizeCollectionOptions, normalizeCollectionRows } from '../src/services/collectionJobService.js';
 
 const jobs = [];
 afterEach(async () => {
@@ -23,6 +24,7 @@ async function fixture({ prefix = 'pack-', type = 'image-pack', field = 'items',
   await fs.mkdir(directory, { recursive: true });
   const state = { id, type, name: 'literal $& {unknown}', status: 'completed', updatedAt: '2026-10-23T00:00:00Z', summary: { outputCount: count },
     [field]: Array.from({ length: count }, (_, index) => ({ sku: `SKU-${index}`, sourceUrl: 'https://example.com/literal?value=%E5%AE%8C%E6%88%90' })), manifestUrl: `/outputs/workbench/${id}/manifest.json` };
+  if (type === 'collection-job') { state.options = normalizeCollectionOptions(); state.items = normalizeCollectionRows(state.items.map(item => ({ ...item, imageUrls: [item.sourceUrl] }))); }
   await writeWorkbenchManifest(state);
   return { state, directory, main: path.join(directory, 'manifest.json'), backup: path.join(directory, prefix === 'collect-job-' ? 'manifest.backup.json' : 'manifest.json.backup') };
 }

@@ -27,7 +27,7 @@ import { createSkuPack, resumeSkuPack, previewSkuPackResume, previewSkuManifestR
 import { readSkuPackSnapshot } from '../services/skuPackStateService.js';
 import { readWorkbenchSnapshot } from '../services/workbenchSnapshotService.js';
 import { parseCollectionSpreadsheet, parseSkuMetadataSpreadsheet } from '../services/collectionSpreadsheetService.js';
-import { createCollectionJob, getCollectionJob, importBrowserImage, runCollectionJob } from '../services/collectionJobService.js';
+import { createCollectionJob, getCollectionJob, importBrowserImage, runCollectionJob, previewCollectionManifestRepair, repairCollectionManifest } from '../services/collectionJobService.js';
 import { getCollectionDraftContext, stageCollectionDraft, submitCollectionDraft, clearCollectionDraft } from '../services/collectionDraftService.js';
 import { previewCollectionPack, createCollectionPack } from '../services/collectionPackService.js';
 
@@ -277,8 +277,10 @@ router.post('/collection-jobs/:jobId/browser-images', browserImageUpload.single(
 }));
 
 router.get('/collection-jobs/:jobId', asyncHandler(async (req, res) => {
-  res.json(await getCollectionJob(req.params.jobId));
+  res.set('Cache-Control', 'no-store').json(await getCollectionJob(req.params.jobId));
 }));
+router.get('/collection-jobs/:jobId/manifest-repair-preview', asyncHandler(async (req, res) => res.set('Cache-Control', 'no-store').json(await previewCollectionManifestRepair(req.params.jobId))));
+router.post('/collection-jobs/:jobId/repair-manifest', asyncHandler(async (req, res) => res.json(await repairCollectionManifest(req.params.jobId, req.body || {}))));
 
 router.get('/collection-jobs/:jobId/sku-pack-preview', asyncHandler(async (req, res) => res.json(await previewCollectionPack(req.params.jobId))));
 router.post('/collection-jobs/:jobId/sku-pack', asyncHandler(async (req, res) => res.json(await createCollectionPack(req.params.jobId, req.body || {}))));

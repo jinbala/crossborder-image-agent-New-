@@ -6,7 +6,10 @@ import https from 'node:https';
 import net from 'node:net';
 import { lookup as dnsLookup } from 'node:dns/promises';
 import { createHash } from 'node:crypto';
-import { assertResource } from './ownershipService.js';
+import { assertResource, currentActor } from './ownershipService.js';
+import { audit, collectionCreationEpoch } from './platformStore.js';
+import { readWorkbenchSnapshot, snapshotReadNotice, workbenchSnapshotDirectory, writeWorkbenchManifest } from './workbenchSnapshotService.js';
+import { atomicRename } from '../utils/atomicRename.js';
 import archiver from 'archiver';
 import sharp from 'sharp';
 import { nanoid } from 'nanoid';
@@ -29,7 +32,8 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 
 function clean(value, fallback = '', max = 180) {
   const text = String(value ?? '').trim().replace(/[<>:"/\\|?*\u0000-\u001f]/g, '-').replace(/\s+/g, ' ');
-  return text.slice(0, max) || fallback;
+  const result = text.slice(0, max);
+  return !result || /^\.{1,2}$/.test(result) ? fallback : result;
 }
 
 function cleanText(value, max = 2000) {
@@ -291,21 +295,9 @@ function summarize(manifest) {
 
 async function checkpoint(jobDir, manifest) {
   manifest.updatedAt = new Date().toISOString();
+  manifest.checkpointRevision = (Number.isSafeInteger(manifest.checkpointRevision) ? manifest.checkpointRevision : 0) + 1;
   manifest.summary = summarize(manifest);
-  const target = path.join(jobDir, 'manifest.json');
-  const backup = path.join(jobDir, 'manifest.backup.json');
-  let hasPreviousBackup = true;
-  try {
-    JSON.parse(await fs.readFile(target, 'utf8'));
-    await fs.copyFile(target, backup);
-  } catch {
-    try { JSON.parse(await fs.readFile(backup, 'utf8')); }
-    catch { hasPreviousBackup = false; }
-  }
-  const temporary = path.join(jobDir, `manifest.${process.pid}.${Date.now()}.tmp`);
-  await fs.writeFile(temporary, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
-  await fs.rename(temporary, target);
-  if (!hasPreviousBackup) await fs.copyFile(target, backup);
+  await writeWorkbenchManifest(manifest);
   indexTask(manifest);
   const now = new Date();
   await fs.utimes(path.join(jobDir, 'run.lock'), now, now).catch(() => {});
@@ -317,17 +309,49 @@ function jobDirectory(jobId) {
 }
 
 export async function getCollectionJob(jobId) {
-  assertResource('job', jobId);
-  const jobDir = jobDirectory(jobId);
-  try { return JSON.parse(await fs.readFile(path.join(jobDir, 'manifest.json'), 'utf8')); }
-  catch (error) {
-    try {
-      const recovered = JSON.parse(await fs.readFile(path.join(jobDir, 'manifest.backup.json'), 'utf8'));
-      return { ...recovered, recoveredFromBackup: true };
-    } catch { /* Preserve the original read failure when neither checkpoint is usable. */ }
-    if (error.code === 'ENOENT') throw Object.assign(new Error('采集任务不存在'), { statusCode: 404 });
-    throw error;
-  }
+  jobDirectory(jobId);
+  const snapshot = await readWorkbenchSnapshot(jobId);
+  return snapshot.source === 'primary' ? snapshot.state : { ...snapshot.state, recoveredFromBackup: snapshot.source === 'backup', manifestRead: { ...snapshotReadNotice(snapshot), canRepair: true } };
+}
+
+async function writableCollection(jobId) {
+  const manifest = await getCollectionJob(jobId);
+  if (manifest.manifestRead?.readOnly === true) throw Object.assign(new Error('当前展示只读恢复快照，请在客户端预览并确认修复主清单，再继续处理或回传；原清单和图片未修改'), { statusCode: 409, code: 'COLLECTION_REPAIR_REQUIRED' });
+  return manifest;
+}
+
+function repairPreview(id, snapshot) {
+  return { id, canRepair: snapshot.source !== 'primary' && !controls.has(id), busy: controls.has(id), source: snapshot.source, sourceName: snapshot.sourceName, sourceHash: snapshot.sourceHash, fileBytes: snapshot.bytes.length,
+    previewHash: fingerprintCollectionRequest({ id, actorId: currentActor()?.id || 'local', epoch: collectionCreationEpoch(), primaryHash: snapshot.primaryHash, sourceHash: snapshot.sourceHash, source: snapshot.sourceName }), onlyManifest: true, imageCount: 0, remote: false };
+}
+export async function previewCollectionManifestRepair(id) { jobDirectory(id); return repairPreview(id, await readWorkbenchSnapshot(id)); }
+export async function repairCollectionManifest(id, input = {}, execution = {}) {
+  const releaseWorkspace = beginCollectionCreation();
+  try { return await repairCollectionManifestInternal(id, input, execution); }
+  finally { releaseWorkspace(); }
+}
+async function repairCollectionManifestInternal(id, input, execution) {
+  const actor = currentActor();
+  if (actor && !['admin', 'operator'].includes(actor.role)) throw Object.assign(new Error('当前角色不能修复采集清单'), { statusCode: 403 });
+  jobDirectory(id); assertResource('job', id);
+  if (input.confirm !== true || !/^[a-f0-9]{64}$/.test(input.previewHash || '') || !/^[a-f0-9]{64}$/.test(input.sourceHash || '')) throw Object.assign(new Error('请先预览并明确确认仅修复主清单'), { statusCode: 400 });
+  const directory = await workbenchSnapshotDirectory(id), release = await acquireLock(directory), temporary = path.join(directory, `manifest.json.repair-${nanoid(12)}.tmp`);
+  try {
+    const snapshot = await readWorkbenchSnapshot(id), preview = repairPreview(id, snapshot);
+    if (snapshot.source === 'primary' && snapshot.sourceHash === input.sourceHash) return { id, repaired: false, alreadyCurrent: true };
+    const changed = () => Object.assign(new Error('主清单或恢复来源已变化，请重新预览确认；未重新处理图片'), { statusCode: 409, code: 'COLLECTION_REPAIR_CHANGED' });
+    if (!preview.canRepair || preview.previewHash !== input.previewHash || preview.sourceHash !== input.sourceHash) throw changed();
+    audit(actor, 'collection-manifest-repair-prepare', id, 202, { previewHash: preview.previewHash, sourceHash: preview.sourceHash, previousHash: snapshot.primaryHash, source: snapshot.source });
+    await fs.writeFile(temporary, snapshot.bytes, { flag: 'wx' });
+    await execution.beforeCommit?.();
+    if (repairPreview(id, await readWorkbenchSnapshot(id)).previewHash !== preview.previewHash) throw changed();
+    const preservedDamaged = snapshot.primaryBytes === null ? null : `manifest.json.damaged-${Date.now()}-${nanoid(8)}`;
+    if (preservedDamaged) await fs.writeFile(path.join(directory, preservedDamaged), snapshot.primaryBytes, { flag: 'wx' });
+    await atomicRename(temporary, path.join(directory, 'manifest.json'));
+    indexTask(snapshot.state);
+    audit(actor, 'collection-manifest-repair-complete', id, 200, { sourceHash: snapshot.sourceHash, preservedDamaged, imagesProcessed: 0 });
+    return { id, repaired: true, preservedDamaged, sourceHash: snapshot.sourceHash, imagesProcessed: 0 };
+  } finally { await fs.rm(temporary, { force: true }).catch(() => {}); await release(); }
 }
 
 export function prepareCollectionInput(raw = {}) {
@@ -424,8 +448,8 @@ async function publishCollectionCreation(reservation, deps) {
     let manifest;
     try { manifest = await getCollectionJob(row.job_id); }
     catch (error) {
-      if (error.statusCode !== 404 || current.state !== 'prepared') throw collectionRequestError('原采集任务清单缺失或损坏，请检查备份；不会另建任务或覆盖进度', 'COLLECTION_REQUEST_FILES_MISSING');
-      const checkpoints = await Promise.all(['manifest.json', 'manifest.backup.json'].map((name) => fs.lstat(path.join(jobDir, name)).catch((failure) => { if (failure.code === 'ENOENT') return null; throw failure; })));
+      if ((error.statusCode !== 404 && error.code !== 'WORKBENCH_STATE_UNAVAILABLE') || current.state !== 'prepared') throw collectionRequestError('原采集任务清单缺失或损坏，请检查备份；不会另建任务或覆盖进度', 'COLLECTION_REQUEST_FILES_MISSING');
+      const checkpoints = await Promise.all(['manifest.json', 'manifest.backup.json', `${row.job_id}.zip`].map((name) => fs.lstat(path.join(jobDir, name)).catch((failure) => { if (failure.code === 'ENOENT') return null; throw failure; })));
       if (checkpoints.some(Boolean)) throw collectionRequestError('原采集清单已存在但无法读取，请检查备份；不会用初始请求覆盖它', 'COLLECTION_REQUEST_FILES_MISSING');
       const images = path.join(jobDir, 'images');
       const entries = await fs.readdir(images).catch((failure) => { if (failure.code === 'ENOENT') return []; throw failure; });
@@ -461,8 +485,7 @@ async function archiveImages(jobDir, manifest) {
     archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
     archive.finalize();
   });
-  await fs.rm(zipPath, { force: true });
-  await fs.rename(temporary, zipPath);
+  await atomicRename(temporary, zipPath);
   return zipPath;
 }
 
@@ -474,13 +497,14 @@ async function acquireLock(jobDir) {
     await handle.close();
   } catch (error) {
     if (error.code !== 'EEXIST') throw error;
-    const stats = await fs.stat(lockPath).catch(() => null);
+    const stat = await fs.lstat(lockPath);
+    if (!stat.isFile() || stat.isSymbolicLink()) throw Object.assign(new Error('采集锁不是普通文件，请人工核对；未读取或移除该路径'), { statusCode: 409, code: 'COLLECTION_LOCK_INVALID' });
     const owner = await fs.readFile(lockPath, 'utf8').then(JSON.parse).catch(() => null);
     let ownerAlive = true;
     if (Number.isInteger(owner?.pid) && owner.pid > 0) {
       try { process.kill(owner.pid, 0); } catch (error) { if (error.code === 'ESRCH') ownerAlive = false; }
     }
-    if (!ownerAlive || (stats && Date.now() - stats.mtimeMs > 10 * 60 * 1000)) {
+    if (!ownerAlive) {
       await fs.rm(lockPath, { force: true });
       return acquireLock(jobDir);
     }
@@ -600,12 +624,13 @@ async function processItem(item, manifest, jobDir, deps) {
 }
 
 export async function runCollectionJob(jobId, raw = {}, deps = {}) {
-  const jobDir = jobDirectory(jobId);
+  await writableCollection(jobId); // Reject read-only recovery before creating a lock.
+  const jobDir = await workbenchSnapshotDirectory(jobId);
   const release = await acquireLock(jobDir);
   const control = { paused: false, cancelled: false };
   controls.set(jobId, control);
   try {
-    const manifest = await getCollectionJob(jobId);
+    const manifest = await writableCollection(jobId);
     // Acquiring the lock establishes exclusive ownership. Interrupted items retain
     // successful image checkpoints and become eligible for a manual continuation.
     for (const item of manifest.items) if (item.status === 'running') item.status = 'pending';
@@ -635,10 +660,11 @@ export async function runCollectionJob(jobId, raw = {}, deps = {}) {
 }
 
 export async function importBrowserImage(jobId, raw = {}) {
-  const jobDir = jobDirectory(jobId);
+  await writableCollection(jobId);
+  const jobDir = await workbenchSnapshotDirectory(jobId);
   const release = await acquireLock(jobDir);
   try {
-    const manifest = await getCollectionJob(jobId);
+    const manifest = await writableCollection(jobId);
     if (manifest.status === 'cancelled') throw Object.assign(new Error('任务已取消，请在客户端明确恢复后再回传图片'), { statusCode: 409 });
     const item = manifest.items.find((candidate) => candidate.id === raw.itemId);
     if (!item) throw Object.assign(new Error('采集任务中不存在指定商品'), { statusCode: 404 });
@@ -701,10 +727,11 @@ export async function pauseCollectionJob(jobId, cancel = false) {
   assertResource('job', jobId);
   const control = controls.get(jobId);
   if (control) { control.paused = true; control.cancelled ||= cancel; return { requested: true, message: '当前商品处理完成后停止，恢复点已保留' }; }
-  const directory = jobDirectory(jobId);
+  await writableCollection(jobId);
+  const directory = await workbenchSnapshotDirectory(jobId);
   const release = await acquireLock(directory);
   try {
-    const manifest = await getCollectionJob(jobId);
+    const manifest = await writableCollection(jobId);
     if (['completed', 'completed_with_errors'].includes(manifest.status)) throw Object.assign(new Error('任务已完成'), { statusCode: 409 });
     manifest.status = cancel || manifest.status === 'cancelled' ? 'cancelled' : 'paused';
     await checkpoint(directory, manifest);

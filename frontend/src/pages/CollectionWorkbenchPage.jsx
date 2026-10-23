@@ -8,6 +8,8 @@ import { assertCollectionDraftContext, recoverCollectionDraft } from '../utils/c
 import { Link } from 'react-router-dom';
 import { collectionResultGuide, collectionPreviewPage, collectionStatuses, collectionStatusLabel, collectionItemsPage, collectionItemsCsv, collectionRunShouldStop } from '../utils/collectionResults.js';
 import { collectionPackLink } from '../utils/collectionPack.js';
+import { manifestRecoveryLabel } from '../utils/skuManifestRecovery.js';
+import { collectionSnapshotReadOnly, canRepairCollectionManifest, approveCollectionManifestRepair } from '../utils/collectionManifestRecovery.js';
 
 const DEFAULT_OPTIONS = {
   name: '',
@@ -123,7 +125,7 @@ export default function CollectionWorkbenchPage() {
   }
 
   async function runBatch({ retryFailed = false } = {}) {
-    if (!job || executing.current || !confirmResume()) return;
+    if (!job || collectionSnapshotReadOnly(job) || executing.current || !confirmResume()) return;
     executing.current = true;
     setBusy(retryFailed ? 'retry' : 'run'); setError('');
     try { setJob(await api.runCollectionJob(job.id, { limit: 10, retryFailed })); }
@@ -132,7 +134,7 @@ export default function CollectionWorkbenchPage() {
   }
 
   async function runContinuously() {
-    if (!job || executing.current || !confirmResume()) return;
+    if (!job || collectionSnapshotReadOnly(job) || executing.current || !confirmResume()) return;
     executing.current = true;
     setBusy('all'); setError('');
     try {
@@ -168,7 +170,21 @@ export default function CollectionWorkbenchPage() {
     finally { setBusy(''); }
   }
 
+  async function repairManifest() {
+    if (executing.current || !canRepairCollectionManifest(job, account?.user?.role)) return;
+    executing.current = true; setBusy('repair'); setError('');
+    try {
+      const payload = await approveCollectionManifestRepair(api, job, t, message => window.confirm(message));
+      if (!payload) return;
+      await api.repairCollectionManifest(job.id, payload);
+      setJob(await api.getCollectionJob(job.id));
+    } catch (err) { setError(err.message); }
+    finally { executing.current = false; setBusy(''); }
+  }
+
   const summary = job?.summary || {};
+  const readOnly = collectionSnapshotReadOnly(job);
+  const manifestNotice = manifestRecoveryLabel(job?.manifestRead, t);
   const nextStep = collectionResultGuide(job);
   const previews = collectionPreviewPage(job, previewPage);
   const itemPage = collectionItemsPage(job, itemQuery);
@@ -238,6 +254,7 @@ export default function CollectionWorkbenchPage() {
 
       {job && <>
         <span hidden data-current-collection-job={job.id} />
+        {manifestNotice && <section data-collection-manifest-recovery className="space-y-3 rounded border border-amber-300 bg-amber-50 p-4 text-sm"><p>{manifestNotice}</p><p>{t('请先预览并确认修复采集主清单，再继续下载或浏览器回传。修复保留损坏副本，不处理图片、不重建 ZIP，也不自动继续任务。')}</p><div className="flex flex-wrap gap-3"><a data-collection-manifest className="btn-secondary" href={api.workbenchManifestUrl(job.id)} download>{t('下载完整清单')}</a>{canRepairCollectionManifest(job, account?.user?.role) && <button data-collection-manifest-repair type="button" className="btn-secondary" disabled={Boolean(busy)} onClick={repairManifest}>{t('预览并修复主清单')}</button>}</div></section>}
         <section data-collection-next-step={nextStep.kind} className="space-y-3 rounded-lg border-2 border-teal-600 bg-teal-50 p-4">
           <h2 className="font-semibold text-teal-950">{t(nextStep.title)}</h2>
           <p className="text-sm leading-6 text-teal-950">{t(nextStep.description)}</p>
@@ -255,9 +272,9 @@ export default function CollectionWorkbenchPage() {
             {[['状态', t(collectionStatusLabel(job.status))], ['总数', summary.inputCount || 0], ['完成', summary.completedCount || 0], ['有警告', summary.warningCount || 0], ['失败', summary.failedCount || 0], ['跳过', summary.skippedCount || 0], ['已下载', summary.downloadedCount || 0]].map(([label, value]) => <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 p-3"><div className="text-xs text-slate-500">{t(label)}</div><div className="mt-1 text-lg font-semibold text-ink">{value}</div></div>)}
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            {summary.pendingCount > 0 && <button type="button" onClick={runContinuously} disabled={Boolean(busy)} className="focus-ring inline-flex items-center gap-2 rounded bg-mint px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy === 'all' ? <LoaderCircle className="animate-spin" size={17} /> : <Play size={17} />}{t("连续处理全部")}</button>}
-            {summary.pendingCount > 0 && <button type="button" onClick={() => runBatch()} disabled={Boolean(busy)} className="focus-ring inline-flex items-center gap-2 rounded bg-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy === 'run' ? <LoaderCircle className="animate-spin" size={17} /> : <Play size={17} />}{t("处理下一批 10 个商品")}</button>}
-            {retryable && <button type="button" onClick={() => runBatch({ retryFailed: true })} disabled={Boolean(busy)} className="focus-ring inline-flex items-center gap-2 rounded border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-900 disabled:opacity-50">{busy === 'retry' ? <LoaderCircle className="animate-spin" size={17} /> : <RefreshCw size={17} />}{t("重试失败项")}</button>}
+            {summary.pendingCount > 0 && <button data-collection-run-all type="button" onClick={runContinuously} disabled={Boolean(busy) || readOnly} className="focus-ring inline-flex items-center gap-2 rounded bg-mint px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy === 'all' ? <LoaderCircle className="animate-spin" size={17} /> : <Play size={17} />}{t("连续处理全部")}</button>}
+            {summary.pendingCount > 0 && <button data-collection-run-batch type="button" onClick={() => runBatch()} disabled={Boolean(busy) || readOnly} className="focus-ring inline-flex items-center gap-2 rounded bg-ink px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy === 'run' ? <LoaderCircle className="animate-spin" size={17} /> : <Play size={17} />}{t("处理下一批 10 个商品")}</button>}
+            {retryable && <button data-collection-retry type="button" onClick={() => runBatch({ retryFailed: true })} disabled={Boolean(busy) || readOnly} className="focus-ring inline-flex items-center gap-2 rounded border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-900 disabled:opacity-50">{busy === 'retry' ? <LoaderCircle className="animate-spin" size={17} /> : <RefreshCw size={17} />}{t("重试失败项")}</button>}
             {job.downloadUrl && <a href={`${ASSET_BASE}${job.downloadUrl}`} className="focus-ring inline-flex items-center gap-2 rounded bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800"><Download size={17} />{t("下载当前 ZIP")}</a>}
             <button type="button" onClick={() => { setJob(null); setFile(null); setManualUrls(''); setError(''); }} disabled={Boolean(busy)} className="focus-ring rounded border border-slate-300 px-4 py-2 text-sm text-slate-600">{t("新建任务")}</button>
           </div>

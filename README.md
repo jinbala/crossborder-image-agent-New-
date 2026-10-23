@@ -1,12 +1,14 @@
 ﻿# Crossborder Image Agent
 
+Windows desktop 0.30.0 passed local source and portable-EXE verification (306 checks each): collection recovery separates read-only snapshots, explicit manifest repair and manual continuation. See [scope and verification](docs/verification-0.30.0.md). The user confirmed successful live Temu transfer after reloading extension 0.5.5; image previews, batch collection and CAPTCHA pause/resume still need separate acceptance. Clean-machine installation, signing and the 2-second startup target remain open.
+
 Crossborder Image Agent is a full-stack MVP for cross-border ecommerce product image production. It runs the workflow from product image upload to mock recognition, product confirmation, platform rule selection, prompt-backed image plans, mock image generation, compliance review, and ZIP export.
 
 The current version is v3.1. Image recognition can run with mock, Qwen, OpenAI, or Gemini Vision providers. Image generation defaults to mock, with an optional OpenAI real background-generation path for safe `lifestyle_image` plans only. Review supports mock rules by default and optional real AI vision risk checks through `REVIEW_PROVIDER`.
 
 ## Tech Stack
 
-Windows desktop 0.29.0 adds read-only backup/archive snapshots and full-manifest downloads for generic workbench results, atomic current backups, and explicit ZIP central-directory integrity checks. Extension remains 0.5.5. See [verification and limits](docs/verification-0.29.0.md) and [implementation progress](docs/implementation-progress.md); live Temu transfer, model licensing/quality, official shop sandboxes and clean-machine release gates remain open. Verified iterations are committed locally; remote push is separate.
+Windows desktop 0.29.0 adds read-only backup/archive snapshots and full-manifest downloads for generic workbench results, atomic current backups, and explicit ZIP central-directory integrity checks. Extension remains 0.5.5. See [verification and limits](docs/verification-0.29.0.md) and [implementation progress](docs/implementation-progress.md); live Temu transfer, model licensing/quality, official shop sandboxes and clean-machine release gates remain open. Local commits await a user-confirmed Git author identity; nothing has been pushed remotely.
 
 - Frontend: React, Vite, Tailwind CSS, React Router
 - Backend: Node.js, Express

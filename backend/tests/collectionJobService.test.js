@@ -12,6 +12,8 @@ import {
   extractProductPage,
   originalImageUrl,
   getCollectionJob,
+  previewCollectionManifestRepair,
+  repairCollectionManifest,
   pauseRunningCollections,
   pauseCollectionJob,
   importBrowserImage,
@@ -69,7 +71,10 @@ test('100-product XLSX fixture filters, resumes after lost manifest, isolates fa
   const deps = { imageFetcher: async (url) => { calls.set(url, (calls.get(url) || 0) + 1); if (url.endsWith('/75.png')) throw Object.assign(new Error('fixture failure'), { code: 'FIXTURE_FAILURE' }); return { buffer: image }; } };
   const first = await runCollectionJob(job.id, { limit: 10 }, deps); assert.equal(first.status, 'paused'); assert.equal(first.summary.completedCount, 10);
   await fs.writeFile(path.join(jobRoot, 'manifest.json'), '{broken');
-  assert.equal((await getCollectionJob(job.id)).recoveredFromBackup, true);
+  assert.equal((await getCollectionJob(job.id)).manifestRead.readOnly, true);
+  await assert.rejects(runCollectionJob(job.id, { limit: 50 }, deps), error => error.code === 'COLLECTION_REPAIR_REQUIRED');
+  const repair = await previewCollectionManifestRepair(job.id);
+  await repairCollectionManifest(job.id, { confirm: true, previewHash: repair.previewHash, sourceHash: repair.sourceHash });
   let done;
   do { done = await runCollectionJob(job.id, { limit: 50 }, deps); } while (done.summary.pendingCount);
   assert.equal(done.summary.skippedCount, 50); assert.equal(done.summary.completedCount, 49); assert.equal(done.summary.failedCount, 1); assert.equal(done.summary.downloadedCount, 49);

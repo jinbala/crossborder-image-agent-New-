@@ -32,7 +32,7 @@ afterEach(async () => {
 test('same request returns its current manifest without rewriting files; different content conflicts', async () => {
   const input = payload(), first = await create(input);
   const file = path.join(folder(first.id), 'manifest.json'); const current = JSON.parse(await fs.readFile(file, 'utf8'));
-  current.status = 'paused'; current.items[0].images = [{ status: 'success', sourceUrl: input.rows[0].imageUrls[0], file: 'retained.png' }];
+  current.status = 'paused'; current.items[0].images = [{ status: 'success', sourceUrl: input.rows[0].imageUrls[0], file: 'retained.png', url: `/outputs/workbench/${first.id}/images/retained.png` }];
   await fs.writeFile(file, JSON.stringify(current)); const bytes = await fs.readFile(file);
   const second = await create(input); assert.equal(second.id, first.id); assert.equal(second.creation.replayed, true); assert.equal(second.status, 'paused'); assert.equal(second.items[0].images.length, 1);
   assert.deepEqual(await fs.readFile(file), bytes);

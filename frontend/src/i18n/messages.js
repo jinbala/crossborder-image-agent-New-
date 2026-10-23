@@ -8,6 +8,9 @@ import { batchReports } from './batchReports.js';
 import { exportReports } from './exportReports.js';
 import { reportDetails } from './reportDetails.js';
 export const english = {
+  '下一步：先确认修复采集主清单': 'Next: confirm repair of the collection manifest first',
+  '请先预览并确认修复采集主清单，再继续下载或浏览器回传。修复保留损坏副本，不处理图片、不重建 ZIP，也不自动继续任务。': 'Preview and confirm repair of the collection manifest before resuming downloads or browser uploads. Repair preserves a damaged copy, does not process images or rebuild the ZIP, and never resumes the task automatically.',
+  '打开采集恢复': 'Open collection recovery',
   '可下载完整只读恢复快照；查看和下载不会修复主清单、重做图片或执行任务。': 'Download the complete read-only recovery snapshot. Viewing and downloading never repair the primary manifest, reprocess images or execute tasks.',
   ...operations,
   ...maintenance,

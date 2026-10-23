@@ -6,6 +6,7 @@ import zipUtils from 'adm-zip/util/index.js';
 import { paths } from './dbPaths.js';
 import { assertResource } from './ownershipService.js';
 import { atomicRename } from '../utils/atomicRename.js';
+import { validateCollectionState } from './collectionStateValidation.js';
 
 const ROOT = path.join(paths.outputDir, 'workbench');
 const LIMIT = 128 * 1024 * 1024;
@@ -39,6 +40,7 @@ async function directoryFor(id, checkOwner = true) {
     throw failure(error.code === 'ENOENT' ? '任务目录不存在，请保留输出并检查备份' : '任务目录无法读取，请检查权限', 'WORKBENCH_STATE_DIRECTORY', error.code === 'ENOENT' ? 404 : 403);
   }
 }
+export const workbenchSnapshotDirectory = id => directoryFor(id);
 
 async function readFile(directory, name, limit = LIMIT) {
   try {
@@ -73,6 +75,7 @@ function parse(bytes, id) {
     try { suffix = decodeURIComponent(state[key].slice(`/outputs/workbench/${id}/`.length)); } catch { suffix = ''; }
     if (!suffix || suffix.split('/').some(part => !part || part === '.' || part === '..') || /[\\\u0000-\u001f?#:%]/.test(suffix)) throw failure('任务下载路径无效，未打开外部地址', 'WORKBENCH_STATE_PATH', 403);
   }
+  if (type === 'collection-job') validateCollectionState(state);
   return state;
 }
 
@@ -88,10 +91,11 @@ export function snapshotReadNotice(snapshot) {
 
 export async function readWorkbenchSnapshot(id) {
   const directory = await directoryFor(id);
-  let reason;
+  let reason, primaryBytes = null;
   try {
-    const bytes = await readFile(directory, 'manifest.json'), state = parse(bytes, id);
-    return { state, bytes, source: 'primary', sourceName: 'manifest.json', sourceHash: snapshotHash(bytes) };
+    primaryBytes = await readFile(directory, 'manifest.json');
+    const state = parse(primaryBytes, id);
+    return { state, bytes: primaryBytes, source: 'primary', sourceName: 'manifest.json', sourceHash: snapshotHash(primaryBytes), primaryBytes, primaryHash: snapshotHash(primaryBytes) };
   } catch (error) {
     if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
     reason = error.code === 'ENOENT' ? 'missing' : 'invalid-json';
@@ -107,7 +111,7 @@ export async function readWorkbenchSnapshot(id) {
     if (bytes.length > LIMIT || bytes.length !== entry.header.size || zipUtils.crc32(bytes) !== entry.header.crc) throw failure('结果包清单大小或校验值无效', 'WORKBENCH_ARCHIVE_INVALID');
     chosen = { state: parse(bytes, id), bytes, source: 'archive', sourceName: archiveName };
   } catch (error) {
-    if (error.code === 'WORKBENCH_STATE_PATH' || error.code === 'WORKBENCH_STATE_IDENTITY' || error.code === 'WORKBENCH_STATE_FILE') throw error;
+    if (error.code === 'WORKBENCH_STATE_PATH' || error.code === 'WORKBENCH_STATE_IDENTITY' || error.code === 'WORKBENCH_STATE_FILE' || error.code === 'COLLECTION_STATE_PATH') throw error;
     if (error.code !== 'ENOENT') throw failure('已发布结果包损坏或不可读取，请检查该包和备份；未回退旧状态或启动处理', 'WORKBENCH_ARCHIVE_INVALID');
   }
   try {
@@ -115,10 +119,10 @@ export async function readWorkbenchSnapshot(id) {
     const bytes = await readFile(directory, name), state = parse(bytes, id);
     if (!chosen || newer(state, chosen.state)) chosen = { state, bytes, source: 'backup', sourceName: name };
   } catch (error) {
-    if (['WORKBENCH_STATE_PATH', 'WORKBENCH_STATE_FILE', 'WORKBENCH_STATE_IDENTITY'].includes(error.code)) throw error;
+    if (['WORKBENCH_STATE_PATH', 'WORKBENCH_STATE_FILE', 'WORKBENCH_STATE_IDENTITY'].includes(error.code) || error.code?.startsWith('COLLECTION_STATE_')) throw error;
     if (!chosen) throw failure('主清单和可用恢复点均缺失或损坏，请保留输出并检查备份；未启动处理', 'WORKBENCH_STATE_UNAVAILABLE');
   }
-  return { ...chosen, reason, sourceHash: snapshotHash(chosen.bytes) };
+  return { ...chosen, reason, sourceHash: snapshotHash(chosen.bytes), primaryBytes, primaryHash: primaryBytes === null ? null : snapshotHash(primaryBytes) };
 }
 
 // Producers call this only after their explicitly requested operation, never on a read.
@@ -128,7 +132,7 @@ export async function writeWorkbenchManifest(state) {
   if (bytes.length > LIMIT) throw failure('任务清单超过保存上限，未覆盖原文件', 'WORKBENCH_STATE_SIZE');
   parse(bytes, state.id);
   const directory = await directoryFor(state.id, false), suffix = randomUUID();
-  const names = ['manifest.json', 'manifest.json.backup'];
+  const names = ['manifest.json', state.type === 'collection-job' ? 'manifest.backup.json' : 'manifest.json.backup'];
   for (const name of names) {
     try { await readFile(directory, name); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }

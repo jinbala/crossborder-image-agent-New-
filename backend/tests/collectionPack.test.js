@@ -90,10 +90,10 @@ test('unsafe relative paths, junctions and unsupported images fail closed before
   const input = await fixture(), original = JSON.parse(await fs.readFile(input.manifest));
   for (const file of ['../secret.png', '/secret.png', 'C:/secret.png', 'SKU\\secret.png', './secret.png']) {
     const changed = structuredClone(original); changed.items[0].images[0].file = file; await fs.writeFile(input.manifest, JSON.stringify(changed));
-    await assert.rejects(previewCollectionPack(input.job.id), error => error.code === 'COLLECTION_PACK_PATH');
+    await assert.rejects(previewCollectionPack(input.job.id), error => error.code === 'COLLECTION_STATE_PATH');
   }
   await fs.symlink(input.folder, path.join(root, input.job.id, 'images', 'escape'), 'junction');
-  const changed = structuredClone(original); changed.items[0].images[0].file = 'escape/原图.png'; await fs.writeFile(input.manifest, JSON.stringify(changed));
+  const changed = structuredClone(original); changed.items[0].images[0].file = 'escape/原图.png'; changed.items[0].images[0].url = `/outputs/workbench/${input.job.id}/images/escape/原图.png`; await fs.writeFile(input.manifest, JSON.stringify(changed));
   await assert.rejects(previewCollectionPack(input.job.id), error => error.code === 'COLLECTION_PACK_PATH');
   await fs.writeFile(input.manifest, JSON.stringify(original));
   const image = path.join(root, input.job.id, 'images', original.items[0].images[0].file); await fs.writeFile(image, 'not a raster');
@@ -179,7 +179,8 @@ test('transfer limits reject zero or over 300 downloaded images without silently
   const input = await fixture(), manifest = JSON.parse(await fs.readFile(input.manifest));
   manifest.items.forEach(item => { item.images = []; }); await fs.writeFile(input.manifest, JSON.stringify(manifest));
   await assert.rejects(previewCollectionPack(input.job.id), /没有已下载图片/);
-  manifest.items[0].images = Array.from({ length: 301 }, (_, index) => ({ status: 'success', file: `SKU/${index}.png` }));
+  manifest.items[0].images = Array.from({ length: 301 }, (_, index) => ({ status: 'success', sourceUrl: `https://fixture.invalid/${index}.png`, file: `SKU/${index}.png`, url: `/outputs/workbench/${input.job.id}/images/SKU/${index}.png` }));
+  manifest.items[0].imageUrls = manifest.items[0].images.map(image => image.sourceUrl);
   await fs.writeFile(input.manifest, JSON.stringify(manifest));
   await assert.rejects(previewCollectionPack(input.job.id), error => error.code === 'COLLECTION_PACK_LIMIT' && error.message.includes('未截断'));
 });

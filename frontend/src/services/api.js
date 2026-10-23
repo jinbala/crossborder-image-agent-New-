@@ -516,6 +516,8 @@ export const api = {
     body: JSON.stringify({ rows, options })
   }),
   getCollectionJob: (jobId) => request(`/workbench/collection-jobs/${encodeURIComponent(jobId)}`),
+  previewCollectionManifestRepair: id => request(`/workbench/collection-jobs/${encodeURIComponent(id)}/manifest-repair-preview`),
+  repairCollectionManifest: (id, payload) => request(`/workbench/collection-jobs/${encodeURIComponent(id)}/repair-manifest`, { method: 'POST', body: JSON.stringify(payload) }),
   previewCollectionPack: (jobId) => request(`/workbench/collection-jobs/${encodeURIComponent(jobId)}/sku-pack-preview`),
   createCollectionPack: (jobId, payload) => request(`/workbench/collection-jobs/${encodeURIComponent(jobId)}/sku-pack`, { method: 'POST', body: JSON.stringify(payload) }),
   runCollectionJob: (jobId, options = {}) => request(`/workbench/collection-jobs/${encodeURIComponent(jobId)}/run`, {
