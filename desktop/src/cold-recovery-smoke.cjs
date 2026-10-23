@@ -104,7 +104,7 @@ async function coldRecoverySmoke({ dataRoot, requestApi, executable, appPath, pa
   return checks;
 }
 
-async function runRecoveryProbe({ window, dataRoot, requestApi, startupRecovery, version, packaged }) {
+async function runRecoveryProbe({ window, dataRoot, requestApi, startupRecovery, version, packaged, startupTrace }) {
   const bootStart = Number(process.argv.find(arg => arg.startsWith('--recovery-benchmark-start='))?.split('=')[1]);
   if (!Number.isFinite(bootStart) || bootStart > Date.now() || Date.now() - bootStart > 120000) throw new Error('Invalid cold recovery benchmark start');
   const checks = {}, metrics = {};
@@ -117,6 +117,25 @@ async function runRecoveryProbe({ window, dataRoot, requestApi, startupRecovery,
     checks.coldRecoveryStartupRoute = startupRecovery && await wait(window, `location.pathname==='/desktop' && Boolean(document.querySelector('[data-startup-recovery]'))`, bootStart + 30000);
     checks.coldRecoveryVisibleWithin30s = await wait(window, `document.querySelectorAll('[data-recovery-id]').length===50`, bootStart + 30000);
     metrics.firstVisibleMs = Date.now() - bootStart;
+    // Diagnostics only: the acceptance clock still starts before child spawn,
+    // not at navigation, authentication, API completion, or the first item.
+    metrics.startupStagesMs = Object.fromEntries(Object.entries(startupTrace || {}).map(([name, timestamp]) => [name, timestamp - bootStart]));
+    metrics.rendererStartup = await window.webContents.executeJavaScript(`(() => {
+      const relative=value=>Math.round(performance.timeOrigin+value-${bootStart});
+      const navigation=performance.getEntriesByType('navigation')[0];
+      const resources=performance.getEntriesByType('resource').filter(entry=>{
+        const url=new URL(entry.name);return url.origin===location.origin &&
+          (url.pathname.startsWith('/assets/') || ['/api/auth/session','/api/desktop/runtime'].includes(url.pathname));
+      });
+      return {navigationStartMs:relative(0),domInteractiveMs:relative(navigation?.domInteractive||0),
+        resources:resources.map(entry=>({path:new URL(entry.name).pathname,startMs:relative(entry.startTime),endMs:relative(entry.responseEnd),durationMs:Math.round(entry.duration)}))};
+    })()`);
+    const stages = ['mainEntered', 'appReady', 'sessionReady', 'extensionReady', 'serviceForked', 'serviceReady', 'windowStarting', 'windowCreated', 'cookieReady', 'documentLoaded'];
+    checks.coldRecoveryStartupMeasurements = stages.every((name, index) => {
+      const elapsed = metrics.startupStagesMs[name];
+      return Number.isFinite(elapsed) && elapsed >= 0 && elapsed <= metrics.firstVisibleMs &&
+        (!index || elapsed >= metrics.startupStagesMs[stages[index - 1]]);
+    }) && metrics.rendererStartup.navigationStartMs >= 0 && metrics.rendererStartup.domInteractiveMs >= metrics.rendererStartup.navigationStartMs;
     checks.coldRecoveryIndexComplete = await wait(window, `document.querySelector('[data-recovery-index-status="completed"]')?.innerText.includes('collect-job-cold-') && document.querySelector('[data-recovery-pager]')?.innerText.includes('10000')`, bootStart + 90000);
     metrics.indexCompleteMs = Date.now() - bootStart;
     const pages = [];

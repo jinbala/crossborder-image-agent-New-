@@ -32,13 +32,40 @@ test('empty initial recovery pages get only five quick read polls before normal 
   }finally{loader.dispose();assert.equal(timer.timers.size,0);}
 });
 
-test('the first indexed item ends quick polling and completed empty scans stop entirely', async()=>{
+test('partial first pages keep the bounded quick cadence until full and completed scans stop', async()=>{
   const timer=clock();let response={...runtime('pending'),recovery:[]};
   const loader=createRecoveryLoader({...timer,getRuntime:async()=>response});
   try {
     await loader.load();assert.equal([...timer.timers.values()][0].ms,100);
-    response=runtime('running');await timer.tick();assert.equal([...timer.timers.values()][0].ms,1000);
+    response=runtime('running');await timer.tick();assert.equal([...timer.timers.values()][0].ms,100);
+    response={...runtime('running'),recovery:Array.from({length:50},(_,index)=>({id:`task-${index}`}))};
+    await timer.tick();assert.equal([...timer.timers.values()][0].ms,1000);
     response={...runtime('completed'),recovery:[]};await timer.tick();assert.equal(timer.timers.size,0);
+  }finally{loader.dispose();}
+});
+
+test('partial pages exhaust the same five-read budget and later pages never quick poll', async()=>{
+  const timer=clock();
+  const loader=createRecoveryLoader({...timer,getRuntime:async page=>runtime('running',page)});
+  try {
+    await loader.load();
+    for(let index=0;index<5;index++){assert.equal([...timer.timers.values()][0].ms,100);await timer.tick();}
+    assert.equal([...timer.timers.values()][0].ms,1000);
+    await loader.load(2);assert.equal([...timer.timers.values()][0].ms,1000);
+  }finally{loader.dispose();}
+});
+
+test('invalid page sizes use normal cadence for populated pages and completed short pages stop',async()=>{
+  const timer=clock();let response;
+  const loader=createRecoveryLoader({...timer,getRuntime:async()=>response});
+  try {
+    for(const pageSize of [undefined,0,-1,1.5,'50',NaN,Infinity]){
+      response={...runtime('running'),recoveryPagination:{page:1,pageSize}};
+      await loader.load();assert.equal([...timer.timers.values()][0].ms,1000);
+    }
+    response={...runtime('running'),recoveryPagination:{page:1,pageSize:1}};
+    await loader.load();assert.equal([...timer.timers.values()][0].ms,1000);
+    response=runtime('completed');await loader.load();assert.equal(timer.timers.size,0);
   }finally{loader.dispose();}
 });
 

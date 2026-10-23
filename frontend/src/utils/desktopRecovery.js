@@ -28,9 +28,13 @@ export function createRecoveryLoader({ getInfo = async () => null, getRuntime, o
       previousRuntime = runtime; failures = 0;
       onData?.({ info, runtime, page });
       if (recoveryIndexPending(runtime)) {
-        // An empty first reply is normal while legacy indexing starts. Allow
-        // only a bounded short burst; populated pages use the normal cadence.
-        const initial = page === 1 && runtime.recovery.length === 0 && initialPolls < maxInitialPolls;
+        // Legacy indexing arrives in batches smaller than a page. Keep the
+        // bounded short burst until the first page fills, not just its first
+        // item. Missing/invalid page sizes must not create an unbounded burst.
+        const pageSize = runtime.recoveryPagination?.pageSize;
+        const incomplete = runtime.recovery.length === 0 ||
+          (Number.isInteger(pageSize) && pageSize > 0 && runtime.recovery.length < pageSize);
+        const initial = page === 1 && incomplete && initialPolls < maxInitialPolls;
         if (initial) initialPolls++;
         later(page, initial ? Math.min(initialPollMs, intervalMs) : intervalMs);
       }

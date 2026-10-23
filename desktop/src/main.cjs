@@ -1,3 +1,4 @@
+const startupTrace = { mainEntered: Date.now() };
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, Tray, nativeImage, utilityProcess, safeStorage } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -82,6 +83,7 @@ async function startService() {
   const service = utilityProcess.fork(path.join(runtime, 'backend', 'src', 'server.js'), [], {
     env, stdio: 'pipe', serviceName: '图片工作台本地服务'
   });
+  if (recoveryProbe) startupTrace.serviceForked = Date.now();
   child = service;
   service.stdout?.on('data', (chunk) => log(chunk.toString()));
   service.stderr?.on('data', (chunk) => log(chunk.toString()));
@@ -94,6 +96,7 @@ async function startService() {
     service.once('exit', (code) => { clearTimeout(timer); reject(new Error(`本地服务在启动时退出（${code}）`)); });
   }).catch((error) => { service.kill(); throw error; });
   origin = `http://127.0.0.1:${ready.port}`;
+  if (recoveryProbe) startupTrace.serviceReady = Date.now();
   service.once('exit', (code) => {
     log(`本地服务已退出，状态 ${code}`);
     if (!quitting && !stopping && !smoke) {
@@ -257,16 +260,19 @@ function registerBridge() {
 }
 
 async function createWindow() {
+  if (recoveryProbe) startupTrace.windowStarting = Date.now();
   window = new BrowserWindow({
     width: 1360, height: 900, minWidth: 1024, minHeight: 680, show: false,
     title: '跨境图片工作台', backgroundColor: '#f8fafc',
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true }
   });
+  if (recoveryProbe) startupTrace.windowCreated = Date.now();
   // Hidden UI probes need foreground-equivalent frames/timers. Production keeps
   // Electron's default background throttling; this does not change user windows.
   if (smoke) window.webContents.setBackgroundThrottling(false);
   if (smoke) window.webContents.on('will-prevent-unload', () => log('自动验收导航触发未保存警告；未自动绕过'));
   await setSessionCookie();
+  if (recoveryProbe) startupTrace.cookieReady = Date.now();
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, url) => { if (!canNavigate(url, origin)) event.preventDefault(); });
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -277,6 +283,7 @@ async function createWindow() {
   });
   window.on('close', (event) => { if (!quitting && tray && !smoke) { event.preventDefault(); window.hide(); } });
   await window.loadURL(`${origin}${startupRoute(pendingRoute, desktopSession?.interrupted)}`);
+  if (recoveryProbe) startupTrace.documentLoaded = Date.now();
   if (!smoke) showWindow();
 }
 
@@ -404,12 +411,15 @@ app.on('before-quit', (event) => {
 app.on('window-all-closed', () => { if (!tray && !smoke) app.quit(); });
 
 if (ownsLock) app.whenReady().then(async () => {
+  if (recoveryProbe) startupTrace.appReady = Date.now();
   const updateConfig = await fs.readFile(path.join(app.getAppPath(), 'src', 'update-trust.json'), 'utf8').then(JSON.parse).catch(() => ({}));
   updater = createUpdater({ directory: path.join(dataRoot, 'updates'), config: updateConfig, currentVersion: app.getVersion() });
   if (app.isPackaged && !smoke && !secondary) app.setAsDefaultProtocolClient('crossborder-workbench');
   await Promise.all(Object.values(directories).map((directory) => fs.mkdir(directory, { recursive: true })));
   desktopSession = await beginDesktopSession(path.join(app.getPath('userData'), 'desktop-session.json'));
+  if (recoveryProbe) startupTrace.sessionReady = Date.now();
   extensionDirectory = await prepareExtension(path.join(runtime, 'browser-extension', 'temu-deep-collector'), dataRoot);
+  if (recoveryProbe) startupTrace.extensionReady = Date.now();
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: '工作台', submenu: [{ label: '客户端与恢复任务', click: () => window.loadURL(`${origin}/desktop`) }, { type: 'separator' }, { role: 'quit', label: '退出' }] },
     { label: '编辑', submenu: [{ role: 'undo', label: '撤销' }, { role: 'redo', label: '重做' }, { type: 'separator' }, { role: 'cut', label: '剪切' }, { role: 'copy', label: '复制' }, { role: 'paste', label: '粘贴' }, { role: 'selectAll', label: '全选' }] },
@@ -420,7 +430,7 @@ if (ownsLock) app.whenReady().then(async () => {
   await createWindow();
   if (!smoke) await createTray();
   if (recoveryProbe) {
-    const report = await require('./cold-recovery-smoke.cjs').runRecoveryProbe({ window, dataRoot, requestApi, startupRecovery: desktopSession.interrupted, version: app.getVersion(), packaged: app.isPackaged });
+    const report = await require('./cold-recovery-smoke.cjs').runRecoveryProbe({ window, dataRoot, requestApi, startupRecovery: desktopSession.interrupted, version: app.getVersion(), packaged: app.isPackaged, startupTrace });
     app.exitCode = report.ok ? 0 : 1; app.quit();
   } else if (smoke) await runSmoke();
 }).catch(async (error) => {
